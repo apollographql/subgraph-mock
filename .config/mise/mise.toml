@@ -1,0 +1,41 @@
+[tasks.fix-spelling]
+run = "typos --write-changes"
+
+[tasks.format-markdown]
+run = "dprint fmt"
+
+[tasks.pr-all]
+run = [
+    "mise run pr-format",
+    "mise run pr-clippy",
+    "mise run pr-rustdoc",
+    "mise run pr-spell-check",
+    "mise run pr-markdown",
+    "mise run pr-test"
+]
+
+[tasks.pr-clippy]
+run = "cargo pr-clippy"
+
+[tasks.pr-rustdoc]
+run = "RUSTDOCFLAGS=\"-D warnings -D rustdoc::broken-intra-doc-links\" cargo doc --all-features --workspace --no-deps"
+
+[tasks.pr-format]
+run = "cargo pr-format"
+
+[tasks.pr-markdown]
+run = "dprint check"
+
+[tasks.pr-spell-check]
+run = "typos"
+
+[tasks.pr-test]
+run = "cargo test"
+
+[tools]
+"cargo:cargo-expand" = "1.0.116"
+"cargo:cargo-llvm-cov" = "0.6.18"
+"cargo:typos-cli" = "1.34.0"
+"cargo:dprint" = "0.50.0"
+mdbook = "0.4.51"
+rust = "1.90.0"
