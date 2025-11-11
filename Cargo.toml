@@ -27,3 +27,4 @@ tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }
 [dev-dependencies]
 apollo-smith = "0.15"
 apollo-parser = "0.8"
+ctor = "0.6"
