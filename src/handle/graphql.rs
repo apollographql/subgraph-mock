@@ -74,13 +74,13 @@ pub async fn handle(
     Ok(resp)
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct GraphQLRequest {
-    query: String,
-    operation_name: Option<String>,
+pub struct GraphQLRequest {
+    pub query: String,
+    pub operation_name: Option<String>,
     #[serde(default)]
-    variables: HashMap<String, Value>,
+    pub variables: HashMap<String, Value>,
     // #[serde(default)]
     // extensions: serde_json::Map<String, Value>,
 }
@@ -96,7 +96,7 @@ fn add_headers(
     // We have to track the last one we saw and treat that as the key for all subsequent None values as such.
     // Based on that contract, the first iteration will *always* yield a value so we can safely just initialize
     // this to a dummy value and trust that it will get overwritten instead of using an Option.
-    let mut last_header_name: HeaderName = HeaderName::from_static("");
+    let mut last_header_name: HeaderName = HeaderName::from_static("unused");
     let mut last_ratio: Option<(u32, u32)> = None;
 
     for (header_name, header_value) in subgraph_name

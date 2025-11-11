@@ -5,20 +5,36 @@ use arbitrary::Unstructured;
 use http_body_util::Full;
 use hyper::{Request, body::Bytes};
 use rand::{RngCore, SeedableRng, rngs::StdRng};
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf};
 use subgraph_mock::{
     Args,
-    handle::{ByteResponse, handle_request},
+    handle::{ByteResponse, graphql::GraphQLRequest, handle_request},
+};
+use tracing_subscriber::{
+    filter::{EnvFilter, LevelFilter},
+    fmt,
+    prelude::*,
 };
 
 /// Initializes the global state of the mock server based on the optional config file name that maps to
-/// a YAML config located in `tests/data/config`.
+/// a YAML config located in `tests/data/config`. **Because these values are static, this function can only be
+/// invoked once per integration test suite.**
 ///
 /// If no config file name is provided, the default will be used.
 ///
 /// Returns the port number that the server would have been mapped to, since that value is not actually
 /// contained within the state of the app and cannot be otherwise tested as such.
 pub fn initialize(config_file_name: Option<&str>) -> anyhow::Result<u16> {
+    tracing_subscriber::registry()
+        .with(fmt::layer().json().flatten_event(true).with_target(false))
+        .with(
+            EnvFilter::builder()
+                .with_default_directive(LevelFilter::ERROR.into())
+                .from_env_lossy(),
+        )
+        .try_init()
+        .expect("unable to set a global tracing subscriber");
+
     let pkg_root = env!("CARGO_MANIFEST_DIR");
     let args = Args {
         config: config_file_name
@@ -66,10 +82,16 @@ pub async fn make_request(
         None => "/".to_owned(),
     };
 
+    let body = serde_json::to_vec(&GraphQLRequest {
+        query: operation_def,
+        operation_name: None,
+        variables: HashMap::new(),
+    })?;
+
     let req = Request::builder()
         .method("POST")
         .uri(uri)
-        .body(Full::new(Bytes::from_owner(operation_def)))?;
+        .body(Full::<Bytes>::from(body))?;
 
     handle_request(req).await
 }
