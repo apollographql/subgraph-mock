@@ -2,6 +2,7 @@
 use serde::{Deserialize, Serialize};
 use std::f64::consts::PI;
 use tokio::time::{Duration, Instant};
+use tracing::trace;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct LatencyConfig {
@@ -54,6 +55,9 @@ impl LatencyGenerator {
         let mut latency_ms = self.cfg.base.as_millis() as u64;
         let elapsed_ms = when.duration_since(self.start).as_millis() as u64;
 
+        trace!("Base latency: {latency_ms}");
+        trace!("Elapsed: {elapsed_ms}");
+
         if let Some(saw) = self.cfg.saw {
             latency_ms += saw_ms(saw, elapsed_ms);
         }
@@ -67,6 +71,7 @@ impl LatencyGenerator {
             latency_ms += triangle_ms(triangle, elapsed_ms);
         }
 
+        trace!("Final latency: {latency_ms}");
         Duration::from_millis(latency_ms)
     }
 }
@@ -84,7 +89,25 @@ fn sine_ms(Shape { amplitude, period }: Shape, elapsed: u64) -> u64 {
     let amplitude = amplitude.as_millis() as u64;
     let period = period.as_millis() as u64;
 
-    (((elapsed as f64) / (period as f64) * PI * 2.0).sin() as u64) * amplitude
+    trace!(
+        amplitude = amplitude,
+        period = period,
+        elapsed = elapsed,
+        "Computing sine value",
+    );
+
+    let sine_value = ((elapsed as f64) / (period as f64) * PI * 2.0).sin(); // -1.0 to 1.0
+    let normalized = (sine_value + 1.0) / 2.0; // 0.0 to 1.0
+    let result = (normalized * amplitude as f64).round() as u64; // 0 to amplitude (in integer steps)
+
+    trace!(
+        sine_value = sine_value,
+        normalized = normalized,
+        result = result,
+        "Sine value computed"
+    );
+
+    result
 }
 
 #[inline(always)]
