@@ -1,10 +1,12 @@
 use anyhow::anyhow;
+use apollo_compiler::Schema;
 use apollo_parser::Parser;
 use apollo_smith::{Document, DocumentBuilder};
 use arbitrary::Unstructured;
-use http_body_util::Full;
-use hyper::{Request, body::Bytes};
+use http_body_util::{BodyExt, Full};
+use hyper::{Request, Response, body::Bytes};
 use rand::{RngCore, SeedableRng, rngs::StdRng};
+use response::validate_response;
 use std::{borrow::Borrow, collections::HashMap, path::PathBuf};
 use subgraph_mock::{
     Args,
@@ -16,6 +18,10 @@ use tracing_subscriber::{
     fmt,
     prelude::*,
 };
+
+mod response;
+
+pub use response::parse_response;
 
 /// Initializes the global state of the mock server based on the optional config file name that maps to
 /// a YAML config located in `tests/data/config`. **Because these values are static, this function can only be
@@ -46,12 +52,12 @@ pub fn initialize(config_file_name: Option<&str>) -> anyhow::Result<u16> {
 }
 
 /// Runs a single request to the mock server through the handler method. Uses seeded RNG for test-case
-/// reproducibility.
+/// reproducibility. Validates that the response was valid based on the generated query.
 ///
 /// If `subgraph_name` is [Some], this request will be sent to the mock as if it were a request to that specific
 /// subgraph.
 ///
-/// Ripped pretty much wholesale from the example in the apollo-smith docs.
+/// Borrows heavily from the example in the apollo-smith docs.
 pub async fn make_request<T>(rng_seed: u64, subgraph_name: T) -> anyhow::Result<ByteResponse>
 where
     T: Borrow<Option<String>>,
@@ -84,7 +90,7 @@ where
     };
 
     let body = serde_json::to_vec(&GraphQLRequest {
-        query: operation_def,
+        query: operation_def.clone(),
         operation_name: None,
         variables: HashMap::new(),
     })?;
@@ -94,7 +100,31 @@ where
         .uri(uri)
         .body(Full::<Bytes>::from(body))?;
 
-    handle_request(req).await
+    // Rip the body out, validate it, then repackage it to return
+    let (parts, body) = handle_request(req).await?.into_parts();
+    let bytes = body.collect().await?.to_bytes();
+
+    validate_response(
+        &Schema::parse_and_validate(supergraph, "schema.graphql")
+            .map_err(|err| anyhow!(err.errors.to_string()))?,
+        &operation_def,
+        &serde_json::to_value(bytes.to_vec())?,
+    )
+    .map_err(|validation_errors| {
+        anyhow!(
+            validation_errors
+                .iter()
+                .map(|error| error.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    })?;
+
+    let boxed_body = Full::new(bytes)
+        .map_err(|infallible| match infallible {})
+        .boxed();
+
+    Ok(Response::from_parts(parts, boxed_body))
 }
 
 /// Run a single request with a timed lifecycle and assert that the generated latency for it matches
