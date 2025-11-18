@@ -5,11 +5,12 @@ use arbitrary::Unstructured;
 use http_body_util::Full;
 use hyper::{Request, body::Bytes};
 use rand::{RngCore, SeedableRng, rngs::StdRng};
-use std::{collections::HashMap, path::PathBuf};
+use std::{borrow::Borrow, collections::HashMap, path::PathBuf};
 use subgraph_mock::{
     Args,
     handle::{ByteResponse, graphql::GraphQLRequest, handle_request},
 };
+use tokio::time::{self, Duration, Instant};
 use tracing_subscriber::{
     filter::{EnvFilter, LevelFilter},
     fmt,
@@ -51,10 +52,10 @@ pub fn initialize(config_file_name: Option<&str>) -> anyhow::Result<u16> {
 /// subgraph.
 ///
 /// Ripped pretty much wholesale from the example in the apollo-smith docs.
-pub async fn make_request(
-    rng_seed: u64,
-    subgraph_name: Option<String>,
-) -> anyhow::Result<ByteResponse> {
+pub async fn make_request<T>(rng_seed: u64, subgraph_name: T) -> anyhow::Result<ByteResponse>
+where
+    T: Borrow<Option<String>>,
+{
     let pkg_root = env!("CARGO_MANIFEST_DIR");
     let supergraph = std::fs::read_to_string(format!("{pkg_root}/tests/data/schema.graphql"))?;
     let parser = Parser::new(&supergraph);
@@ -77,7 +78,7 @@ pub async fn make_request(
     let mut gql_doc = DocumentBuilder::with_document(&mut u, apollo_smith_doc)?;
     let operation_def: String = gql_doc.operation_definition()?.unwrap().into();
 
-    let uri = match subgraph_name {
+    let uri = match subgraph_name.borrow() {
         Some(name) => format!("/{name}"),
         None => "/".to_owned(),
     };
@@ -94,4 +95,54 @@ pub async fn make_request(
         .body(Full::<Bytes>::from(body))?;
 
     handle_request(req).await
+}
+
+/// Run a single request with a timed lifecycle and assert that the generated latency for it matches
+/// `expected`. Returns the generated latency as a convenience for advancing time correctly as needed.
+async fn test_latency<T>(expected: u64, rng_seed: u64, subgraph_name: T) -> anyhow::Result<Duration>
+where
+    T: Borrow<Option<String>>,
+{
+    let start = Instant::now();
+    let response = make_request(rng_seed, subgraph_name).await?;
+    assert_eq!(200, response.status());
+    let elapsed = start.elapsed();
+    assert_eq!(Duration::from_millis(expected), elapsed);
+
+    Ok(elapsed)
+}
+
+/// Asserts that the request latency function is sine
+///
+/// This must be called in a test that has paused time before initializing the mock server in order to make
+/// consistent assertions about the wave state.
+///
+/// For details on how paused time works, see
+/// https://tokio.rs/tokio/topics/testing#pausing-and-resuming-time-in-tests
+pub async fn assert_is_sine<T>(
+    rng_seed: u64,
+    base: u64,
+    amplitude: u64,
+    period: Duration,
+    subgraph_name: T,
+) -> anyhow::Result<()>
+where
+    T: Borrow<Option<String>>,
+{
+    // At t=0 seconds, our sine wave is halfway up its amplitude
+    let elapsed = test_latency(base + (amplitude / 2), rng_seed, subgraph_name.borrow()).await?;
+
+    // Advancing half a period should put us at the same latency on the other side of the wave
+    time::advance(period.div_f64(2.0) - elapsed).await;
+    let elapsed = test_latency(base + (amplitude / 2), rng_seed, subgraph_name.borrow()).await?;
+
+    // Advancing a quarter period should put us at the bottom
+    time::advance(period.div_f64(4.0) - elapsed).await;
+    let elapsed = test_latency(base, rng_seed, subgraph_name.borrow()).await?;
+
+    // Advancing a half period should put us at the top
+    time::advance(period.div_f64(2.0) - elapsed).await;
+    test_latency(base + amplitude, rng_seed, subgraph_name.borrow()).await?;
+
+    Ok(())
 }
