@@ -41,8 +41,8 @@ jobs:
         if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/main" ]]; then
           echo "should_run=true" >> $GITHUB_OUTPUT
         else
-          # Check if any files in crates/ directory, Cargo.toml or Cargo.lock were changed
-          git diff --name-only HEAD^ HEAD | grep -q -E "^src/|^Cargo\.toml$|^Cargo\.lock$" && echo "should_run=true" >> $GITHUB_OUTPUT || echo "should_run=false" >> $GITHUB_OUTPUT
+          # Check if any rust source code, Cargo.toml or Cargo.lock were changed
+          git diff --name-only HEAD^ HEAD | grep -q -E "^(src/|tests/)|^Cargo\.toml$|^Cargo\.lock$" && echo "should_run=true" >> $GITHUB_OUTPUT || echo "should_run=false" >> $GITHUB_OUTPUT
         fi
 
   test-stable:

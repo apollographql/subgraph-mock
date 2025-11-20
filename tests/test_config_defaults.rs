@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::harness::{assert_is_sine, make_request};
+use crate::harness::{assert_is_sine, make_request, parse_response};
 
 mod harness;
 
@@ -31,5 +31,16 @@ async fn test_default_headers() -> anyhow::Result<()> {
     assert_eq!(1, headers.len());
 
     assert!(headers.contains_key("content-type"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_default_response_generation() -> anyhow::Result<()> {
+    let response = make_request(42, None).await?;
+    assert_eq!(200, response.status());
+
+    // For now, proof of concept that we can deserialize and validate a response
+    // TODO: make assertions on null ratio, value lengths, etc.
+    let _data = parse_response(response).await?;
     Ok(())
 }
