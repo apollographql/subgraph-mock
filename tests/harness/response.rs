@@ -8,8 +8,9 @@ use serde::Deserialize;
 use serde_json::Value;
 use subgraph_mock::handle::ByteResponse;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, PartialEq)]
 #[allow(dead_code)]
+#[serde(deny_unknown_fields)]
 pub struct Address {
     pub street_address1: Option<String>,
     pub street_address2: Option<String>,
@@ -19,8 +20,9 @@ pub struct Address {
     pub country: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, PartialEq)]
 #[allow(dead_code)]
+#[serde(deny_unknown_fields)]
 pub struct Post {
     pub id: Option<u64>,
     pub title: Option<String>,
@@ -29,8 +31,9 @@ pub struct Post {
     pub featured_image: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, PartialEq)]
 #[allow(dead_code)]
+#[serde(deny_unknown_fields)]
 pub struct User {
     pub id: Option<u64>,
     pub posts: Option<Vec<Post>>,
@@ -40,8 +43,9 @@ pub struct User {
     pub address: Option<Address>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, PartialEq)]
 #[allow(dead_code)]
+#[serde(deny_unknown_fields)]
 pub struct Query {
     pub posts: Option<Vec<Post>>,
     pub post: Option<Post>,
@@ -51,6 +55,7 @@ pub struct Query {
 
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
+#[serde(deny_unknown_fields)]
 pub struct Response {
     pub data: Query,
 }
@@ -72,11 +77,11 @@ impl Display for ValidationError {
     }
 }
 
-/// Parses a raw [ByteResponse] from the mock subgraph server into a modeled [Response] for making test assertions
-pub async fn parse_response(response: ByteResponse) -> anyhow::Result<Response> {
+/// Parses a raw [ByteResponse] from the mock subgraph server into a modeled [Query] for making test assertions
+pub async fn parse_response(response: ByteResponse) -> anyhow::Result<Query> {
     let body = response.into_body().collect().await?;
-    let value = serde_json::from_slice(&body.to_bytes())?;
-    Ok(value)
+    let value: Response = serde_json::from_slice(&body.to_bytes())?;
+    Ok(value.data)
 }
 
 /// Validates that a response contains all fields requested in an arbitrary GraphQL query against a given schema

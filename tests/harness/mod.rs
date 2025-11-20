@@ -13,6 +13,7 @@ use subgraph_mock::{
     handle::{ByteResponse, graphql::GraphQLRequest, handle_request},
 };
 use tokio::time::{self, Duration, Instant};
+use tracing::debug;
 use tracing_subscriber::{
     filter::{EnvFilter, LevelFilter},
     fmt,
@@ -33,10 +34,10 @@ pub use response::parse_response;
 /// contained within the state of the app and cannot be otherwise tested as such.
 pub fn initialize(config_file_name: Option<&str>) -> anyhow::Result<u16> {
     tracing_subscriber::registry()
-        .with(fmt::layer().json().flatten_event(true).with_target(false))
+        .with(fmt::layer().compact())
         .with(
             EnvFilter::builder()
-                .with_default_directive(LevelFilter::ERROR.into())
+                .with_default_directive(LevelFilter::OFF.into())
                 .from_env_lossy(),
         )
         .try_init()
@@ -56,6 +57,9 @@ pub fn initialize(config_file_name: Option<&str>) -> anyhow::Result<u16> {
 ///
 /// If `subgraph_name` is [Some], this request will be sent to the mock as if it were a request to that specific
 /// subgraph.
+///
+/// Run your test case with `RUST_LOG=debug` to see the query generated for a given RNG seed. This will allow you
+/// to then make assumptions about the structure of your responses in the test.
 ///
 /// Borrows heavily from the example in the apollo-smith docs.
 pub async fn make_request<T>(rng_seed: u64, subgraph_name: T) -> anyhow::Result<ByteResponse>
@@ -95,6 +99,8 @@ where
         variables: HashMap::new(),
     })?;
 
+    debug!("Query for seed {rng_seed}:\n{operation_def}");
+
     let req = Request::builder()
         .method("POST")
         .uri(uri)
@@ -119,6 +125,11 @@ where
                 .join(", ")
         )
     })?;
+
+    debug!(
+        "Response for seed {rng_seed}:\n{}",
+        String::from_utf8_lossy(&bytes)
+    );
 
     let boxed_body = Full::new(bytes)
         .map_err(|infallible| match infallible {})
