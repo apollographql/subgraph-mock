@@ -133,9 +133,9 @@ dependencies = [
 
 [[package]]
 name = "apollo-smith"
-version = "0.15.1"
+version = "0.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "38c8cfeb15595a4f979c46712c30fb781d95335bab2be276554b923cadb120af"
+checksum = "d357249cf88f604ab4086df0c14104b8d47849893e5b8a12fb2843f08bb1bc2a"
 dependencies = [
  "apollo-compiler",
  "apollo-parser",
