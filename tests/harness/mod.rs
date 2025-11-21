@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use anyhow::anyhow;
 use apollo_compiler::Schema;
 use apollo_parser::Parser;
@@ -6,7 +7,6 @@ use arbitrary::Unstructured;
 use http_body_util::{BodyExt, Full};
 use hyper::{Request, Response, body::Bytes};
 use rand::{RngCore, SeedableRng, rngs::StdRng};
-use response::validate_response;
 use serde_json::Value;
 use std::{borrow::Borrow, collections::HashMap, path::PathBuf};
 use subgraph_mock::{
@@ -23,7 +23,7 @@ use tracing_subscriber::{
 
 mod response;
 
-pub use response::parse_response;
+pub use response::*;
 
 /// Initializes the global state of the mock server based on the optional config file name that maps to
 /// a YAML config located in `tests/data/config`. **Because these values are static, this function can only be
@@ -67,9 +67,8 @@ pub async fn make_request<T>(rng_seed: u64, subgraph_name: T) -> anyhow::Result<
 where
     T: Borrow<Option<String>>,
 {
-    let pkg_root = env!("CARGO_MANIFEST_DIR");
-    let supergraph = std::fs::read_to_string(format!("{pkg_root}/tests/data/schema.graphql"))?;
-    let parser = Parser::new(&supergraph);
+    let supergraph = include_str!("../data/schema.graphql");
+    let parser = Parser::new(supergraph);
 
     let tree = parser.parse();
     if tree.errors().next().is_some() {
