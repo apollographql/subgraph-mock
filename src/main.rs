@@ -17,7 +17,7 @@ use tracing_subscriber::{
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
-        .with(fmt::layer().json().flatten_event(true).with_target(false))
+        .with(fmt::layer().compact().with_target(false))
         .with(
             EnvFilter::builder()
                 .with_default_directive(LevelFilter::INFO.into())
