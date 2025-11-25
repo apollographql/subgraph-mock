@@ -35,12 +35,20 @@ async fn test_default_headers() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_default_response_generation() -> anyhow::Result<()> {
-    let response = make_request(42, None).await?;
-    assert_eq!(200, response.status());
+async fn test_default_response_generation_caches() -> anyhow::Result<()> {
+    let mut responses: Vec<_> = Vec::with_capacity(10);
+    for _ in 0..10 {
+        let response = make_request(7, None).await?;
+        assert_eq!(200, response.status());
+        responses.push(parse_response(response).await?);
+    }
 
-    // For now, proof of concept that we can deserialize and validate a response
-    // TODO: make assertions on null ratio, value lengths, etc.
-    let _data = parse_response(response).await?;
+    // All responses should be the same because they are cached by default
+    for (index, response) in responses.iter().enumerate() {
+        if index > 0 {
+            assert_eq!(response, &responses[index - 1]);
+        }
+    }
+
     Ok(())
 }
