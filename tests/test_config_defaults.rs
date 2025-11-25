@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::harness::{assert_is_sine, make_request, parse_response};
+use harness::{assert_is_sine, make_request, parse_response};
 
 mod harness;
 
@@ -11,7 +11,7 @@ mod harness;
 /// For details on how paused time works, see
 /// https://tokio.rs/tokio/topics/testing#pausing-and-resuming-time-in-tests
 #[tokio::test(start_paused = true)]
-async fn test_default_latency_and_port() -> anyhow::Result<()> {
+async fn default_latency_and_port() -> anyhow::Result<()> {
     let port = harness::initialize(None)?;
     let rng_seed = 0;
     let subgraph_name = None;
@@ -23,7 +23,7 @@ async fn test_default_latency_and_port() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_default_headers() -> anyhow::Result<()> {
+async fn default_headers() -> anyhow::Result<()> {
     let response = make_request(42, None).await?;
     let headers = response.headers();
 
@@ -35,7 +35,7 @@ async fn test_default_headers() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_default_response_generation_caches() -> anyhow::Result<()> {
+async fn default_response_generation_caches() -> anyhow::Result<()> {
     let mut responses: Vec<_> = Vec::with_capacity(10);
     for _ in 0..10 {
         let response = make_request(7, None).await?;
