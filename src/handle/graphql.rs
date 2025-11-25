@@ -5,9 +5,9 @@ use crate::{
 };
 use anyhow::anyhow;
 use apollo_compiler::{
-    ExecutableDocument, Name, Schema,
+    ExecutableDocument, Name, Node, Schema,
     ast::OperationType,
-    executable::{Selection, SelectionSet},
+    executable::{Field, Selection, SelectionSet},
     schema::ExtendedType,
     validation::Valid,
 };
@@ -335,44 +335,78 @@ impl<'a, 'doc, 'schema> ResponseBuilder<'a, 'doc, 'schema> {
         &mut self,
         selection_set: &SelectionSet,
     ) -> anyhow::Result<Map<String, Value>> {
+        let grouped_fields = self.collect_fields(selection_set)?;
         let mut result = Map::new();
+
+        for (key, fields) in grouped_fields {
+            // The first occurrence of a field is representative for metadata that is defined by the schema
+            let meta_field = fields[0];
+
+            let val = if meta_field.name == "__typename" {
+                Value::String(selection_set.ty.to_string())
+            } else if !meta_field.ty().is_non_null() && self.should_be_null() {
+                Value::Null
+            } else {
+                let is_selection_set = !meta_field.selection_set.is_empty();
+                let is_array = meta_field.ty().is_list();
+
+                if is_selection_set {
+                    let mut selections = Vec::new();
+                    for field in fields {
+                        selections.extend_from_slice(&field.selection_set.selections);
+                    }
+                    let full_selection_set = SelectionSet {
+                        ty: meta_field.selection_set.ty.clone(),
+                        selections,
+                    };
+
+                    if is_array {
+                        Value::Array(self.array_selection_set(&full_selection_set)?)
+                    } else {
+                        Value::Object(self.selection_set(&full_selection_set)?)
+                    }
+                } else {
+                    match is_array {
+                        false => self.leaf_field(meta_field.ty().inner_named_type())?,
+                        true => self.array_leaf_field(meta_field.ty().inner_named_type())?,
+                    }
+                }
+            };
+
+            result.insert(key, val);
+        }
+
+        Ok(result)
+    }
+
+    fn collect_fields(
+        &self,
+        selection_set: &'doc SelectionSet,
+    ) -> anyhow::Result<HashMap<String, Vec<&'doc Node<Field>>>> {
+        let mut collected_fields: HashMap<String, Vec<&Node<Field>>> = HashMap::new();
 
         for selection in &selection_set.selections {
             match selection {
                 Selection::Field(field) => {
-                    let val = if field.name == "__typename" {
-                        Value::String(selection_set.ty.to_string())
-                    } else if !field.ty().is_non_null() && self.should_be_null() {
-                        Value::Null
-                    } else {
-                        match (field.selection_set.is_empty(), field.ty().is_list()) {
-                            (true, false) => self.leaf_field(field.ty().inner_named_type())?,
-                            (true, true) => self.array_leaf_field(field.ty().inner_named_type())?,
-                            (false, false) => {
-                                Value::Object(self.selection_set(&field.selection_set)?)
-                            }
-                            (false, true) => {
-                                Value::Array(self.array_selection_set(&field.selection_set)?)
-                            }
-                        }
-                    };
-
-                    result.insert(field.name.to_string(), val);
+                    let key = field.alias.as_ref().unwrap_or(&field.name).to_string();
+                    collected_fields.entry(key).or_default().push(field);
                 }
-
                 Selection::FragmentSpread(fragment) => {
                     if let Some(fragment_def) = self.doc.fragments.get(&fragment.fragment_name) {
-                        result.extend(self.selection_set(&fragment_def.selection_set)?);
+                        for (key, mut fields) in self.collect_fields(&fragment_def.selection_set)? {
+                            collected_fields.entry(key).or_default().append(&mut fields);
+                        }
                     }
                 }
-
                 Selection::InlineFragment(inline_fragment) => {
-                    result.extend(self.selection_set(&inline_fragment.selection_set)?);
+                    for (key, mut fields) in self.collect_fields(&inline_fragment.selection_set)? {
+                        collected_fields.entry(key).or_default().append(&mut fields);
+                    }
                 }
             }
         }
 
-        Ok(result)
+        Ok(collected_fields)
     }
 
     fn leaf_field(&mut self, type_name: &Name) -> anyhow::Result<Value> {

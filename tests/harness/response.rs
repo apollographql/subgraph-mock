@@ -10,7 +10,6 @@ use subgraph_mock::handle::ByteResponse;
 
 #[derive(Debug, Deserialize, PartialEq)]
 #[allow(dead_code)]
-#[serde(deny_unknown_fields)]
 pub struct Address {
     pub street_address1: Option<String>,
     pub street_address2: Option<String>,
@@ -22,7 +21,6 @@ pub struct Address {
 
 #[derive(Debug, Deserialize, PartialEq)]
 #[allow(dead_code)]
-#[serde(deny_unknown_fields)]
 pub struct Post {
     pub id: Option<u64>,
     pub title: Option<String>,
@@ -33,7 +31,6 @@ pub struct Post {
 
 #[derive(Debug, Deserialize, PartialEq)]
 #[allow(dead_code)]
-#[serde(deny_unknown_fields)]
 pub struct User {
     pub id: Option<u64>,
     pub posts: Option<Vec<Post>>,
@@ -45,7 +42,6 @@ pub struct User {
 
 #[derive(Debug, Deserialize, PartialEq)]
 #[allow(dead_code)]
-#[serde(deny_unknown_fields)]
 pub struct Query {
     pub posts: Option<Vec<Post>>,
     pub post: Option<Post>,
@@ -55,7 +51,6 @@ pub struct Query {
 
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
-#[serde(deny_unknown_fields)]
 pub struct Response {
     pub data: Query,
 }
@@ -150,7 +145,7 @@ fn validate_selection_set(
 
                             // If the field has a selection set, validate nested fields
                             if !field.selection_set.selections.is_empty() {
-                                if field_value.is_null() {
+                                if field_value.is_null() && field.ty().is_non_null() {
                                     errors.push(ValidationError {
                                         path: new_path,
                                         field: field_name.to_string(),

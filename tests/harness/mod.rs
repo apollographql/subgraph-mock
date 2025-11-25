@@ -7,6 +7,7 @@ use http_body_util::{BodyExt, Full};
 use hyper::{Request, Response, body::Bytes};
 use rand::{RngCore, SeedableRng, rngs::StdRng};
 use response::validate_response;
+use serde_json::Value;
 use std::{borrow::Borrow, collections::HashMap, path::PathBuf};
 use subgraph_mock::{
     Args,
@@ -110,11 +111,20 @@ where
     let (parts, body) = handle_request(req).await?.into_parts();
     let bytes = body.collect().await?.to_bytes();
 
+    debug!(
+        "Response for seed {rng_seed}:\n{}",
+        String::from_utf8_lossy(&bytes)
+    );
+
+    let raw: Value = serde_json::from_slice(&bytes)?;
     validate_response(
         &Schema::parse_and_validate(supergraph, "schema.graphql")
             .map_err(|err| anyhow!(err.errors.to_string()))?,
         &operation_def,
-        &serde_json::to_value(bytes.to_vec())?,
+        raw.as_object()
+            .ok_or(anyhow!("response should be a JSON object"))?
+            .get("data")
+            .expect("response should have data"),
     )
     .map_err(|validation_errors| {
         anyhow!(
@@ -125,11 +135,6 @@ where
                 .join(", ")
         )
     })?;
-
-    debug!(
-        "Response for seed {rng_seed}:\n{}",
-        String::from_utf8_lossy(&bytes)
-    );
 
     let boxed_body = Full::new(bytes)
         .map_err(|infallible| match infallible {})
