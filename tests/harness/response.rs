@@ -4,6 +4,7 @@ use apollo_compiler::{ExecutableDocument, Schema};
 use http_body_util::BodyExt;
 use serde::Deserialize;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::fmt::{self, Display, Formatter};
 use subgraph_mock::handle::ByteResponse;
 
@@ -16,6 +17,8 @@ pub struct Address {
     pub state: Option<String>,
     pub post_code: Option<String>,
     pub country: Option<String>,
+    #[serde(flatten)]
+    pub aliased: HashMap<String, Value>,
 }
 
 #[derive(Debug, Deserialize, PartialEq)]
@@ -26,6 +29,9 @@ pub struct Post {
     pub content: Option<String>,
     pub author: Option<User>,
     pub featured_image: Option<String>,
+    pub views: Option<i32>,
+    #[serde(flatten)]
+    pub aliased: HashMap<String, Value>,
 }
 
 #[derive(Debug, Deserialize, PartialEq)]
@@ -37,6 +43,10 @@ pub struct User {
     pub email: Option<String>,
     pub bio: Option<String>,
     pub address: Option<Address>,
+    pub is_active: Option<bool>,
+    pub distance: Option<f64>,
+    #[serde(flatten)]
+    pub aliased: HashMap<String, Value>,
 }
 
 #[derive(Debug, Deserialize, PartialEq)]
@@ -46,6 +56,8 @@ pub struct Query {
     pub post: Option<Post>,
     pub user: Option<User>,
     pub users: Option<Vec<User>>,
+    #[serde(flatten)]
+    pub aliased: HashMap<String, Value>,
 }
 
 #[derive(Debug, Deserialize)]
