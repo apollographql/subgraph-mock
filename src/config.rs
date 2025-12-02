@@ -72,9 +72,7 @@ impl Config {
             .collect();
 
         let mut response_generation = self.response_generation;
-        let mut scalars = ResponseGenerationConfig::default().scalars;
-        scalars.extend(response_generation.scalars);
-        response_generation.scalars = scalars;
+        response_generation.merge_default_scalars();
 
         info!(config=%serde_json::to_string(&response_generation).unwrap(), "response generation");
 
