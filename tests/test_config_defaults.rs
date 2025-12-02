@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use harness::{assert_is_sine, make_request, parse_response};
+use harness::{Query, assert_is_sine, make_request, parse_response};
 
 mod harness;
 
@@ -36,9 +36,9 @@ async fn default_headers() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn default_response_generation_caches() -> anyhow::Result<()> {
-    let mut responses: Vec<_> = Vec::with_capacity(10);
+    let mut responses: Vec<Query> = Vec::with_capacity(10);
     for _ in 0..10 {
-        let response = make_request(7, None).await?;
+        let response = make_request(4449, None).await?;
         assert_eq!(200, response.status());
         responses.push(parse_response(response).await?);
     }

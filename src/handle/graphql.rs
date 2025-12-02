@@ -216,7 +216,7 @@ pub struct ResponseGenerationConfig {
 impl Default for ResponseGenerationConfig {
     fn default() -> Self {
         let scalars = [
-            ("Bool".into(), ScalarGenerator::Bool),
+            ("Boolean".into(), ScalarGenerator::Bool),
             ("Int".into(), ScalarGenerator::Int { min: 0, max: 100 }),
             ("ID".into(), ScalarGenerator::Int { min: 0, max: 100 }),
             (
