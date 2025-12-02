@@ -51,11 +51,20 @@ pub async fn handle(
 
     let mut hasher = DefaultHasher::new();
     req.query.hash(&mut hasher);
-    let query_hash = hasher.finish();
 
     let cfg = subgraph_name
-        .and_then(|name| SUBGRAPH_RESPONSE_GENERATION_CONFIGS.wait().get(name))
+        .and_then(|name| {
+            SUBGRAPH_RESPONSE_GENERATION_CONFIGS
+                .wait()
+                .get(name)
+                // if this subgraph has an overridden response generation config, add the subgraph name to the hash
+                // so a response that conforms to the subgraph's config is added to the cache rather than re-using
+                // the standard cached response for this query
+                .inspect(|_| name.hash(&mut hasher))
+        })
         .unwrap_or_else(|| RESPONSE_GENERATION_CONFIG.wait());
+
+    let query_hash = hasher.finish();
 
     let (bytes, status_code) = if subgraph_name
         .and_then(|name| SUBGRAPH_CACHE_RESPONSES.wait().get(name).copied())
