@@ -46,7 +46,7 @@ response_generation:
   # in the schema provided to the server, unmatched scalars will be
   # defaulted to being represented as strings with lengths 1-10.
   scalars:
-    Bool:
+    Boolean:
       type: bool
     Float:
       type: float

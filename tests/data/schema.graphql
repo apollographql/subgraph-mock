@@ -60,6 +60,7 @@ type Post
   content: String! @join__field(graph: POSTS) @join__field(graph: USERS, external: true)
   author: User! @join__field(graph: POSTS)
   featuredImage: String @join__field(graph: POSTS)
+  views: Int! @join__field(graph: POSTS)
 }
 
 type Query
@@ -82,4 +83,6 @@ type User
   email: String! @join__field(graph: USERS)
   bio: String! @join__field(graph: USERS, requires: "posts {content}")
   address: Address! @join__field(graph: USERS)
+  is_active: Boolean! @join__field(graph: USERS)
+  distance: Float! @join__field(graph: USERS)
 }
