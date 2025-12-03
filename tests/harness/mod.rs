@@ -230,3 +230,40 @@ where
 
     Ok(())
 }
+
+/// Asserts that the request latency function is saw
+///
+/// This must be called in a test that has paused time before initializing the mock server in order to make
+/// consistent assertions about the wave state.
+///
+/// For details on how paused time works, see
+/// https://tokio.rs/tokio/topics/testing#pausing-and-resuming-time-in-tests
+pub async fn assert_is_saw<T>(
+    rng_seed: u64,
+    base: u64,
+    amplitude: u64,
+    period: Duration,
+    subgraph_name: T,
+) -> anyhow::Result<()>
+where
+    T: Borrow<Option<String>>,
+{
+    // At t=0 seconds, our saw wave is at the bottom of the wave
+    let elapsed = test_latency(base, rng_seed, subgraph_name.borrow()).await?;
+
+    // Advancing a half period should move us halfway up the slope
+    time::advance(period.div_f64(2.0) - elapsed).await;
+    let elapsed = test_latency(base + amplitude / 2, rng_seed, subgraph_name.borrow()).await?;
+
+    // Advancing another half period minus 1ms should hit the 'top'. By the nature of a saw wave, the drop from the
+    // top and 0 are a straight line (effectively simultaneous). So our function will never actually hit amplitude
+    // because it resets to 0 in that same tick of time.
+    time::advance(period.div_f64(2.0) - elapsed - Duration::from_millis(1)).await;
+    test_latency(base + amplitude - 1, rng_seed, subgraph_name.borrow()).await?;
+
+    // Advancing 1ms should put us back at the bottom of the wave
+    time::advance(Duration::from_millis(1)).await;
+    test_latency(base, rng_seed, subgraph_name.borrow()).await?;
+
+    Ok(())
+}

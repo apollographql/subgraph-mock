@@ -1,0 +1,5 @@
+latency:
+  base: 10ms
+  saw:
+    amplitude: 20ms
+    period: 10s

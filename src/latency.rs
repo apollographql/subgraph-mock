@@ -81,7 +81,18 @@ fn saw_ms(Shape { amplitude, period }: Shape, elapsed: u64) -> u64 {
     let amplitude = amplitude.as_millis() as u64;
     let period = period.as_millis() as u64;
 
-    (((elapsed + period / 2) % period) / period * amplitude * 2) - amplitude
+    trace!(
+        amplitude = amplitude,
+        period = period,
+        elapsed = elapsed,
+        "Computing saw value",
+    );
+
+    let result = ((elapsed % period) * amplitude) / period;
+
+    trace!(result = result, "Saw value computed");
+
+    result
 }
 
 #[inline(always)]
