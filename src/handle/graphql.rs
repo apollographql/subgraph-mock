@@ -24,6 +24,7 @@ use serde_json::{Map, Number, Value, json};
 use std::{
     collections::HashMap,
     hash::{DefaultHasher, Hash, Hasher},
+    mem,
     ops::RangeInclusive,
     sync::atomic::Ordering,
 };
@@ -207,46 +208,70 @@ fn generate_response(
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResponseGenerationConfig {
+    #[serde(default = "default_scalar_config")]
     pub scalars: HashMap<String, ScalarGenerator>,
+    #[serde(default = "default_array_size")]
     pub array: ArraySize,
+    #[serde(default = "default_null_ratio")]
     pub null_ratio: Option<(u32, u32)>,
+    #[serde(default)]
     pub header_ratio: HashMap<String, (u32, u32)>,
+}
+
+impl ResponseGenerationConfig {
+    /// Merges the default scalar config with the provided config, allowing users to specify a partial set of scalar
+    /// generators while inheriting the default configuration for those they do not specify.
+    pub fn merge_default_scalars(&mut self) {
+        let default = default_scalar_config();
+        let provided = mem::replace(&mut self.scalars, default);
+        self.scalars.extend(provided);
+    }
 }
 
 impl Default for ResponseGenerationConfig {
     fn default() -> Self {
-        let scalars = [
-            ("Boolean".into(), ScalarGenerator::Bool),
-            ("Int".into(), ScalarGenerator::Int { min: 0, max: 100 }),
-            ("ID".into(), ScalarGenerator::Int { min: 0, max: 100 }),
-            (
-                "Float".into(),
-                ScalarGenerator::Float {
-                    min: -1.0,
-                    max: 1.0,
-                },
-            ),
-            (
-                "String".into(),
-                ScalarGenerator::String {
-                    min_len: 1,
-                    max_len: 10,
-                },
-            ),
-        ]
-        .into_iter()
-        .collect();
-
         Self {
-            scalars,
-            array: ArraySize {
-                min_length: 0,
-                max_length: 10,
-            },
-            null_ratio: Some((1, 2)),
+            scalars: default_scalar_config(),
+            array: default_array_size(),
+            null_ratio: default_null_ratio(),
             header_ratio: HashMap::new(),
         }
     }
+}
+
+fn default_scalar_config() -> HashMap<String, ScalarGenerator> {
+    [
+        ("Boolean".into(), ScalarGenerator::Bool),
+        ("Int".into(), ScalarGenerator::Int { min: 0, max: 100 }),
+        ("ID".into(), ScalarGenerator::Int { min: 0, max: 100 }),
+        (
+            "Float".into(),
+            ScalarGenerator::Float {
+                min: -1.0,
+                max: 1.0,
+            },
+        ),
+        (
+            "String".into(),
+            ScalarGenerator::String {
+                min_len: 1,
+                max_len: 10,
+            },
+        ),
+    ]
+    .into_iter()
+    .collect()
+}
+
+fn default_array_size() -> ArraySize {
+    ArraySize {
+        min_length: 0,
+        max_length: 10,
+    }
+}
+
+fn default_null_ratio() -> Option<(u32, u32)> {
+    Some((1, 2))
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
