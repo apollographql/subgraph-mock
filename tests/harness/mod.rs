@@ -191,3 +191,42 @@ where
 
     Ok(())
 }
+
+/// Asserts that the request latency function is square
+///
+/// This must be called in a test that has paused time before initializing the mock server in order to make
+/// consistent assertions about the wave state.
+///
+/// For details on how paused time works, see
+/// https://tokio.rs/tokio/topics/testing#pausing-and-resuming-time-in-tests
+pub async fn assert_is_square<T>(
+    rng_seed: u64,
+    base: u64,
+    amplitude: u64,
+    period: Duration,
+    subgraph_name: T,
+) -> anyhow::Result<()>
+where
+    T: Borrow<Option<String>>,
+{
+    // At t=0 seconds, our square wave is at the top of the wave
+    let elapsed = test_latency(base + amplitude, rng_seed, subgraph_name.borrow()).await?;
+
+    // Advancing a quarter period should still have the same value
+    time::advance(period.div_f64(4.0) - elapsed).await;
+    let elapsed = test_latency(base + amplitude, rng_seed, subgraph_name.borrow()).await?;
+
+    // Advancing another quarter period should drop to the bottom of the wave
+    time::advance(period.div_f64(4.0) - elapsed).await;
+    let elapsed = test_latency(base, rng_seed, subgraph_name.borrow()).await?;
+
+    // Advancing another quarter period should stay at the bottom of the wave
+    time::advance(period.div_f64(4.0) - elapsed).await;
+    let elapsed = test_latency(base, rng_seed, subgraph_name.borrow()).await?;
+
+    // Advancing another quarter period should go back to the top
+    time::advance(period.div_f64(4.0) - elapsed).await;
+    test_latency(base + amplitude, rng_seed, subgraph_name.borrow()).await?;
+
+    Ok(())
+}

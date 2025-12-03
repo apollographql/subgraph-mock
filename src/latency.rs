@@ -115,7 +115,22 @@ fn square_ms(Shape { amplitude, period }: Shape, elapsed: u64) -> u64 {
     let amplitude = amplitude.as_millis() as u64;
     let period = period.as_millis() as u64;
 
-    (4 * elapsed / period) - 2 * ((2 * elapsed / period) + 1) * amplitude
+    trace!(
+        amplitude = amplitude,
+        period = period,
+        elapsed = elapsed,
+        "Computing square value",
+    );
+
+    let result = if elapsed % period < period / 2 {
+        amplitude
+    } else {
+        0
+    };
+
+    trace!(result = result, "Square value computed");
+
+    result
 }
 
 #[inline(always)]

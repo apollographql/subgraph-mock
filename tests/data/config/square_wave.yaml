@@ -1,0 +1,5 @@
+latency:
+  base: 10ms
+  square:
+    amplitude: 5ms
+    period: 20s
