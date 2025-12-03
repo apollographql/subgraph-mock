@@ -1,0 +1,20 @@
+cache_responses: false
+
+response_generation:
+  scalars:
+    Float:
+      type: float
+      min: -5.0
+      max: 5.0
+    Int:
+      type: int
+      min: 10
+      max: 15
+    ID:
+      type: int
+      min: 100
+      max: 200
+    String:
+      type: string
+      min_len: 10
+      max_len: 20

@@ -56,7 +56,7 @@ response_generation:
       type: int
       min: 0
       max: 100
-    Id:
+    ID:
       type: int
       min: 0
       max: 100
