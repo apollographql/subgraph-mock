@@ -1,0 +1,9 @@
+cache_responses: false
+
+headers:
+  sometimes-present: "but not always"
+
+response_generation:
+  null_ratio: [1, 5]
+  header_ratio:
+    sometimes-present: [1, 2]
