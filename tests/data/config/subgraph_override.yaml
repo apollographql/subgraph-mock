@@ -1,0 +1,11 @@
+headers:
+  test-header: "test-header-normal-value"
+
+subgraph_overrides:
+  special_subgraph:
+    response_generation:
+      array:
+        min_length: 11
+        max_length: 20
+    headers:
+      test-header: "test-header-overridden-value"
