@@ -81,7 +81,18 @@ fn saw_ms(Shape { amplitude, period }: Shape, elapsed: u64) -> u64 {
     let amplitude = amplitude.as_millis() as u64;
     let period = period.as_millis() as u64;
 
-    (((elapsed + period / 2) % period) / period * amplitude * 2) - amplitude
+    trace!(
+        amplitude = amplitude,
+        period = period,
+        elapsed = elapsed,
+        "Computing saw value",
+    );
+
+    let result = ((elapsed % period) * amplitude) / period;
+
+    trace!(result = result, "Saw value computed");
+
+    result
 }
 
 #[inline(always)]
@@ -115,7 +126,22 @@ fn square_ms(Shape { amplitude, period }: Shape, elapsed: u64) -> u64 {
     let amplitude = amplitude.as_millis() as u64;
     let period = period.as_millis() as u64;
 
-    (4 * elapsed / period) - 2 * ((2 * elapsed / period) + 1) * amplitude
+    trace!(
+        amplitude = amplitude,
+        period = period,
+        elapsed = elapsed,
+        "Computing square value",
+    );
+
+    let result = if elapsed % period < period / 2 {
+        amplitude
+    } else {
+        0
+    };
+
+    trace!(result = result, "Square value computed");
+
+    result
 }
 
 #[inline(always)]
@@ -123,7 +149,23 @@ fn triangle_ms(Shape { amplitude, period }: Shape, elapsed: u64) -> u64 {
     let amplitude = amplitude.as_millis() as u64;
     let period = period.as_millis() as u64;
 
-    // time.Duration(4*a/p*math.Abs(math.Mod(((math.Mod((x-p/4), p))+p), p)-p/2) - a)
-    4 * amplitude / (((((elapsed - period / 4) % period) + period) % period) - period / 2)
-        - amplitude
+    trace!(
+        amplitude = amplitude,
+        period = period,
+        elapsed = elapsed,
+        "Computing triangle value",
+    );
+
+    let position_in_period = elapsed % period;
+    let half_period = period / 2;
+
+    let result = if position_in_period < half_period {
+        (position_in_period * amplitude) / half_period
+    } else {
+        ((period - position_in_period) * amplitude) / half_period
+    };
+
+    trace!(result = result, "Triangle value computed");
+
+    result
 }
