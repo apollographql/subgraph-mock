@@ -149,7 +149,23 @@ fn triangle_ms(Shape { amplitude, period }: Shape, elapsed: u64) -> u64 {
     let amplitude = amplitude.as_millis() as u64;
     let period = period.as_millis() as u64;
 
-    // time.Duration(4*a/p*math.Abs(math.Mod(((math.Mod((x-p/4), p))+p), p)-p/2) - a)
-    4 * amplitude / (((((elapsed - period / 4) % period) + period) % period) - period / 2)
-        - amplitude
+    trace!(
+        amplitude = amplitude,
+        period = period,
+        elapsed = elapsed,
+        "Computing triangle value",
+    );
+
+    let position_in_period = elapsed % period;
+    let half_period = period / 2;
+
+    let result = if position_in_period < half_period {
+        (position_in_period * amplitude) / half_period
+    } else {
+        ((period - position_in_period) * amplitude) / half_period
+    };
+
+    trace!(result = result, "Triangle value computed");
+
+    result
 }

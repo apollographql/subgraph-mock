@@ -1,0 +1,5 @@
+latency:
+  base: 0ms
+  triangle:
+    amplitude: 10ms
+    period: 10s
