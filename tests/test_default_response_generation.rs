@@ -1,3 +1,5 @@
+use anyhow::ensure;
+use futures::stream::{FuturesUnordered, StreamExt};
 use harness::{Post, Query, User, make_request, parse_response};
 
 mod harness;
@@ -10,14 +12,22 @@ async fn port_override() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn default_response_generation() -> anyhow::Result<()> {
     let mut responses: Vec<Query> = Vec::with_capacity(1000);
-    for _ in 0..1000 {
-        // This produces a query that has all data types represented. To see it, run the test with RUST_LOG=debug.
-        let response = make_request(7, None).await?;
-        assert_eq!(200, response.status());
-        responses.push(parse_response(response).await?);
+    let mut requests: FuturesUnordered<_> = (0..1000)
+        .map(|_| {
+            // This produces a query that has all data types represented. To see it, run the test with RUST_LOG=debug.
+            async {
+                let response = make_request(7, None).await?;
+                ensure!(200 == response.status());
+                parse_response(response).await
+            }
+        })
+        .collect();
+
+    while let Some(response) = requests.next().await {
+        responses.push(response?);
     }
 
     // This field is a top-level alias in the query that requests a single user by ID (and is hence nullable)
