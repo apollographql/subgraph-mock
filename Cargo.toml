@@ -9,6 +9,7 @@ tokio = { version = "1.47.1", features = ["macros", "parking_lot", "rt-multi-thr
 [dependencies]
 anyhow = "1.0.99"
 apollo-compiler = "1.30.0"
+async-recursion = "1.1.1"
 arbitrary = "1.4.2"
 cached = { version = "0.56.0", features = ["async", "async_tokio_rt_multi_thread"] }
 clap = { version = "4.5.47", features = ["derive"] }
