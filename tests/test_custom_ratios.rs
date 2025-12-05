@@ -1,17 +1,27 @@
-use futures::{StreamExt, stream};
+use anyhow::ensure;
+use futures::{
+    StreamExt,
+    stream::{self, FuturesUnordered},
+};
 use harness::{make_request, parse_response};
 
 mod harness;
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn custom_ratios() -> anyhow::Result<()> {
     harness::initialize(Some("custom_ratios.yaml"))?;
 
     let mut responses = Vec::with_capacity(1000);
-    for _ in 0..1000 {
-        let response = make_request(1122833, None).await?;
-        assert_eq!(200, response.status());
-        responses.push(response);
+    let mut requests: FuturesUnordered<_> = (0..1000)
+        .map(|_| async {
+            let response = make_request(1122833, None).await?;
+            ensure!(200 == response.status());
+            Ok(response)
+        })
+        .collect();
+
+    while let Some(response) = requests.next().await {
+        responses.push(response?);
     }
 
     let header_count = responses
