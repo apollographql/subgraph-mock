@@ -11,7 +11,6 @@ use apollo_compiler::{
     schema::ExtendedType,
     validation::Valid,
 };
-use async_recursion::async_recursion;
 use cached::proc_macro::cached;
 use http_body_util::{BodyExt, Full};
 use hyper::{
@@ -19,7 +18,7 @@ use hyper::{
     body::Bytes,
     header::{HeaderName, HeaderValue},
 };
-use rand::{Rng, SeedableRng, rngs::StdRng, seq::IteratorRandom};
+use rand::{Rng, rngs::ThreadRng, seq::IteratorRandom};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Number, Value, json};
 use std::{
@@ -166,7 +165,7 @@ async fn into_response_bytes_and_status_code(
     );
 
     let resp = match op.operation_type {
-        OperationType::Query => match generate_response(cfg, op_name, &doc, schema).await {
+        OperationType::Query => match generate_response(cfg, op_name, &doc, schema) {
             Ok(resp) => resp,
             Err(err) => {
                 error!(%err, "unable to generate response");
@@ -199,7 +198,7 @@ async fn into_response_bytes_and_status_code(
     }
 }
 
-async fn generate_response(
+fn generate_response(
     cfg: &ResponseGenerationConfig,
     op_name: Option<&str>,
     doc: &Valid<ExecutableDocument>,
@@ -210,9 +209,8 @@ async fn generate_response(
         Err(_) => return Ok(json!({ "data": null })),
     };
 
-    let data = ResponseBuilder::new(StdRng::from_os_rng(), doc, schema, cfg)
-        .selection_set(&op.selection_set)
-        .await?;
+    let data = ResponseBuilder::new(&mut rand::rng(), doc, schema, cfg)
+        .selection_set(&op.selection_set)?;
 
     Ok(json!({ "data": data }))
 }
@@ -306,7 +304,7 @@ impl ScalarGenerator {
         max_len: 10,
     };
 
-    fn generate(&self, rng: &mut StdRng) -> anyhow::Result<Value> {
+    fn generate(&self, rng: &mut ThreadRng) -> anyhow::Result<Value> {
         let val = match *self {
             Self::Bool => Value::Bool(rng.random_bool(0.5)),
             Self::Int { min, max } => Value::Number(rng.random_range(min..=max).into()),
@@ -346,7 +344,7 @@ impl ArraySize {
 }
 
 struct ResponseBuilder<'a, 'doc, 'schema> {
-    rng: StdRng,
+    rng: &'a mut ThreadRng,
     doc: &'doc Valid<ExecutableDocument>,
     schema: &'schema Valid<Schema>,
     cfg: &'a ResponseGenerationConfig,
@@ -354,7 +352,7 @@ struct ResponseBuilder<'a, 'doc, 'schema> {
 
 impl<'a, 'doc, 'schema> ResponseBuilder<'a, 'doc, 'schema> {
     fn new(
-        rng: StdRng,
+        rng: &'a mut ThreadRng,
         doc: &'doc Valid<ExecutableDocument>,
         schema: &'schema Valid<Schema>,
         cfg: &'a ResponseGenerationConfig,
@@ -367,8 +365,7 @@ impl<'a, 'doc, 'schema> ResponseBuilder<'a, 'doc, 'schema> {
         }
     }
 
-    #[async_recursion]
-    async fn selection_set(
+    fn selection_set(
         &mut self,
         selection_set: &SelectionSet,
     ) -> anyhow::Result<Map<String, Value>> {
@@ -398,9 +395,9 @@ impl<'a, 'doc, 'schema> ResponseBuilder<'a, 'doc, 'schema> {
                     };
 
                     if is_array {
-                        Value::Array(self.array_selection_set(&full_selection_set).await?)
+                        Value::Array(self.array_selection_set(&full_selection_set)?)
                     } else {
-                        Value::Object(self.selection_set(&full_selection_set).await?)
+                        Value::Object(self.selection_set(&full_selection_set)?)
                     }
                 } else {
                     match is_array {
@@ -452,7 +449,7 @@ impl<'a, 'doc, 'schema> ResponseBuilder<'a, 'doc, 'schema> {
                 let enum_value = enum_ty
                     .values
                     .values()
-                    .choose(&mut self.rng)
+                    .choose(self.rng)
                     .ok_or(anyhow!("empty enum: {type_name}"))?;
 
                 Ok(Value::String(enum_value.value.to_string()))
@@ -463,7 +460,7 @@ impl<'a, 'doc, 'schema> ResponseBuilder<'a, 'doc, 'schema> {
                 .scalars
                 .get(scalar.name.as_str())
                 .unwrap_or(&ScalarGenerator::DEFAULT)
-                .generate(&mut self.rng),
+                .generate(self.rng),
 
             _ => unreachable!("A field with an empty selection set must be a scalar or enum type"),
         }
@@ -473,14 +470,11 @@ impl<'a, 'doc, 'schema> ResponseBuilder<'a, 'doc, 'schema> {
         Ok(self.rng.random_range(self.cfg.array.range()))
     }
 
-    async fn array_selection_set(
-        &mut self,
-        selection_set: &SelectionSet,
-    ) -> anyhow::Result<Vec<Value>> {
+    fn array_selection_set(&mut self, selection_set: &SelectionSet) -> anyhow::Result<Vec<Value>> {
         let num_values = self.arbitrary_array_len()?;
         let mut values = Vec::with_capacity(num_values);
         for _ in 0..num_values {
-            values.push(Value::Object(self.selection_set(selection_set).await?));
+            values.push(Value::Object(self.selection_set(selection_set)?));
         }
 
         Ok(values)
