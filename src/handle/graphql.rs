@@ -9,7 +9,7 @@ use apollo_compiler::{
     ast::OperationType,
     executable::{Field, Selection, SelectionSet},
     schema::ExtendedType,
-    validation::Valid,
+    validation::{Valid, WithErrors},
 };
 use cached::proc_macro::cached;
 use http_body_util::{BodyExt, Full};
@@ -130,6 +130,17 @@ fn add_headers(
     headers.insert("Content-Type", HeaderValue::from_static("application/json"));
 }
 
+#[cached(result = true, key = "u64", convert = "{_query_hash}")]
+fn parse_and_validate(
+    req: &GraphQLRequest,
+    schema: &Valid<Schema>,
+    _query_hash: u64,
+) -> Result<Valid<ExecutableDocument>, WithErrors<ExecutableDocument>> {
+    let op_name = req.operation_name.as_deref().unwrap_or("unknown");
+
+    ExecutableDocument::parse_and_validate(schema, &req.query, op_name)
+}
+
 #[tracing::instrument(skip(req))]
 #[cached(key = "u64", convert = "{query_hash}")]
 async fn into_response_bytes_and_status_code(
@@ -138,12 +149,11 @@ async fn into_response_bytes_and_status_code(
     query_hash: u64,
 ) -> (Bytes, StatusCode) {
     let schema = SUPERGRAPH_SCHEMA.wait();
-    let op_name = req.operation_name.as_deref().unwrap_or("unknown");
 
     debug!(%query_hash, "handling graphql request");
     trace!(variables=?req.variables, "request variables");
 
-    let doc = match ExecutableDocument::parse_and_validate(schema, &req.query, op_name) {
+    let doc = match parse_and_validate(&req, schema, query_hash) {
         Ok(doc) => doc,
         Err(err) => {
             let errs: Vec<_> = err.errors.iter().map(|d| d.to_json()).collect();
