@@ -29,7 +29,7 @@ async fn custom_scalars() -> anyhow::Result<()> {
                     response
                         .aliased
                         .remove(user_alias)
-                        .and_then(|user| serde_json::from_value(user).ok()),
+                        .and_then(|user| serde_json_bytes::from_value(user).ok()),
                     response.post,
                 )
             })

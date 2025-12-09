@@ -3,7 +3,7 @@ use apollo_compiler::validation::Valid;
 use apollo_compiler::{ExecutableDocument, Schema};
 use http_body_util::BodyExt;
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json_bytes::{Value, serde_json};
 use std::collections::HashMap;
 use std::fmt::{self, Display, Formatter};
 use subgraph_mock::handle::ByteResponse;
