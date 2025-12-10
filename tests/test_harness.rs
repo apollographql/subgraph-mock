@@ -1,5 +1,5 @@
 use apollo_compiler::{Schema, validation::Valid};
-use serde_json::json;
+use serde_json_bytes::json;
 
 use harness::{ValidationError, validate_response};
 

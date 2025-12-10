@@ -20,7 +20,10 @@ use hyper::{
 };
 use rand::{Rng, rngs::ThreadRng, seq::IteratorRandom};
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Number, Value, json};
+use serde_json_bytes::{
+    ByteString, Map, Value, json,
+    serde_json::{self, Number},
+};
 use std::{
     collections::HashMap,
     hash::{DefaultHasher, Hash, Hasher},
@@ -333,7 +336,7 @@ impl ScalarGenerator {
                     chars.push(rng.random::<char>());
                 }
 
-                Value::String(chars.into_iter().collect())
+                Value::String(ByteString::from(chars.into_iter().collect::<String>()))
             }
         };
 
@@ -378,7 +381,7 @@ impl<'a, 'doc, 'schema> ResponseBuilder<'a, 'doc, 'schema> {
     fn selection_set(
         &mut self,
         selection_set: &SelectionSet,
-    ) -> anyhow::Result<Map<String, Value>> {
+    ) -> anyhow::Result<Map<ByteString, Value>> {
         let grouped_fields = self.collect_fields(selection_set)?;
         let mut result = Map::new();
 
@@ -387,7 +390,7 @@ impl<'a, 'doc, 'schema> ResponseBuilder<'a, 'doc, 'schema> {
             let meta_field = fields[0];
 
             let val = if meta_field.name == "__typename" {
-                Value::String(selection_set.ty.to_string())
+                Value::String(ByteString::from(selection_set.ty.to_string()))
             } else if !meta_field.ty().is_non_null() && self.should_be_null() {
                 Value::Null
             } else {
@@ -462,7 +465,9 @@ impl<'a, 'doc, 'schema> ResponseBuilder<'a, 'doc, 'schema> {
                     .choose(self.rng)
                     .ok_or(anyhow!("empty enum: {type_name}"))?;
 
-                Ok(Value::String(enum_value.value.to_string()))
+                Ok(Value::String(ByteString::from(
+                    enum_value.value.to_string(),
+                )))
             }
 
             ExtendedType::Scalar(scalar) => self
