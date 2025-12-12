@@ -28,14 +28,16 @@ fn validate_simple_query() -> Result<(), Vec<ValidationError>> {
         "#;
 
     let response = json!({
-        "user": {
-            "id": "1",
-            "name": "Isaac M. Good",
-            "email": "scrapersgostraighttospam@!valid",
+        "data": {
+            "user": {
+                "id": "1",
+                "name": "Isaac M. Good",
+                "email": "scrapersgostraighttospam@!valid",
+            }
         }
     });
 
-    validate_response(&schema, query, &response)
+    validate_response(&schema, query, response)
 }
 
 #[test]
@@ -52,13 +54,15 @@ fn validate_missing_field() {
         "#;
 
     let response = json!({
-        "user": {
-            "id": "1",
-            "name": "Isaac M. Good",
+        "data": {
+            "user": {
+                "id": "1",
+                "name": "Isaac M. Good",
+            }
         }
     });
 
-    let result = validate_response(&schema, query, &response);
+    let result = validate_response(&schema, query, response);
     assert!(result.is_err());
     let errors = result.unwrap_err();
     assert_eq!(errors.len(), 1);
@@ -81,16 +85,18 @@ fn validate_nested_fields() -> Result<(), Vec<ValidationError>> {
         "#;
 
     let response = json!({
-        "user": {
-            "id": "1",
-            "address": {
-                "city": "Not Telling the Internet",
-                "state": "CA"
+        "data": {
+            "user": {
+                "id": "1",
+                "address": {
+                    "city": "Not Telling the Internet",
+                    "state": "CA"
+                }
             }
         }
     });
 
-    validate_response(&schema, query, &response)
+    validate_response(&schema, query, response)
 }
 
 #[test]
@@ -109,25 +115,27 @@ fn validate_array_fields() -> Result<(), Vec<ValidationError>> {
         "#;
 
     let response = json!({
-        "posts": [
-            {
-                "id": "1",
-                "title": "Post 1",
-                "author": {
-                    "name": "Isaac M. Good"
+        "data": {
+            "posts": [
+                {
+                    "id": "1",
+                    "title": "Post 1",
+                    "author": {
+                        "name": "Isaac M. Good"
+                    }
+                },
+                {
+                    "id": "2",
+                    "title": "Post 2",
+                    "author": {
+                        "name": "Isaac B. Bad"
+                    }
                 }
-            },
-            {
-                "id": "2",
-                "title": "Post 2",
-                "author": {
-                    "name": "Isaac B. Bad"
-                }
-            }
-        ]
+            ]
+        }
     });
 
-    validate_response(&schema, query, &response)
+    validate_response(&schema, query, response)
 }
 
 #[test]
@@ -143,13 +151,15 @@ fn validate_with_field_alias() -> Result<(), Vec<ValidationError>> {
         "#;
 
     let response = json!({
-        "user": {
-            "userId": "1",
-            "fullName": "Isaac M. Good",
+        "data": {
+            "user": {
+                "userId": "1",
+                "fullName": "Isaac M. Good",
+            }
         }
     });
 
-    validate_response(&schema, query, &response)
+    validate_response(&schema, query, response)
 }
 
 #[test]
@@ -168,14 +178,16 @@ fn validate_inline_fragment() -> Result<(), Vec<ValidationError>> {
         "#;
 
     let response = json!({
-        "user": {
-            "id": "1",
-            "name": "Isaac M. Good",
-            "email": "scrapersgostraighttospam@!valid",
+        "data": {
+            "user": {
+                "id": "1",
+                "name": "Isaac M. Good",
+                "email": "scrapersgostraighttospam@!valid",
+            }
         }
     });
 
-    validate_response(&schema, query, &response)
+    validate_response(&schema, query, response)
 }
 
 #[test]
@@ -200,18 +212,20 @@ fn validate_fragment_spread() -> Result<(), Vec<ValidationError>> {
         "#;
 
     let response = json!({
-        "user": {
-            "id": "1",
-            "name": "Isaac M. Good",
-            "email": "scrapersgostraighttospam@!valid",
-            "address": {
-                "city": "Not Telling the Internet",
-                "state": "CA"
+        "data": {
+            "user": {
+                "id": "1",
+                "name": "Isaac M. Good",
+                "email": "scrapersgostraighttospam@!valid",
+                "address": {
+                    "city": "Not Telling the Internet",
+                    "state": "CA"
+                }
             }
         }
     });
 
-    validate_response(&schema, query, &response)
+    validate_response(&schema, query, response)
 }
 
 #[test]
@@ -236,15 +250,17 @@ fn validate_fragment_spread_missing_field() {
         "#;
 
     let response = json!({
-        "user": {
-            "id": "1",
-            "name": "Isaac M. Good",
-            "email": "scrapersgostraighttospam@!valid",
-            // missing address
+        "data": {
+            "user": {
+                "id": "1",
+                "name": "Isaac M. Good",
+                "email": "scrapersgostraighttospam@!valid",
+                // missing address
+            }
         }
     });
 
-    let result = validate_response(&schema, query, &response);
+    let result = validate_response(&schema, query, response);
     assert!(result.is_err());
     let errors = result.unwrap_err();
     assert_eq!(errors.len(), 1);
