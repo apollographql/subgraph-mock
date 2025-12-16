@@ -1,4 +1,4 @@
-FROM --platform=$BUILDPLATFORM rust:1.91.1 AS build
+FROM --platform=$BUILDPLATFORM rust:1.92.0 AS build
 
 # create a new empty shell project
 RUN USER=root cargo new --bin subgraph-mock
