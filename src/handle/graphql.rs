@@ -151,7 +151,8 @@ async fn into_response_bytes_and_status_code(
     req: GraphQLRequest,
     query_hash: u64,
 ) -> (Bytes, StatusCode) {
-    let schema = SUPERGRAPH_SCHEMA.wait();
+    let lock = SUPERGRAPH_SCHEMA.read().expect("Schema lock");
+    let schema = lock.as_ref().expect("Schema should be loaded at startup");
 
     debug!(%query_hash, "handling graphql request");
     trace!(variables=?req.variables, "request variables");
