@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 use anyhow::anyhow;
-use apollo_compiler::{Schema, validation::Valid};
+use apollo_compiler::{Schema, response::JsonMap, validation::Valid};
 use apollo_parser::Parser;
 use apollo_smith::{Document, DocumentBuilder};
 use arbitrary::Unstructured;
@@ -9,7 +9,7 @@ use http_body_util::{BodyExt, Full};
 use hyper::{Request, Response as HyperResponse, body::Bytes};
 use rand::{RngCore, SeedableRng, rngs::StdRng};
 use serde_json_bytes::{Value, serde_json};
-use std::{borrow::Borrow, collections::HashMap, path::PathBuf};
+use std::{borrow::Borrow, path::PathBuf};
 use subgraph_mock::{
     Args,
     handle::{ByteResponse, graphql::GraphQLRequest, handle_request},
@@ -51,7 +51,7 @@ pub fn initialize(config_file_name: Option<&str>) -> anyhow::Result<u16> {
             .map(|name| PathBuf::from(format!("{pkg_root}/tests/data/config/{name}"))),
         schema: PathBuf::from(format!("{pkg_root}/tests/data/schema.graphql")),
     };
-    args.init()
+    args.init().map(|(port, _)| port)
 }
 
 /// Cached supergraph document that is used as the basis for generating requests
@@ -111,7 +111,7 @@ where
     let body = serde_json::to_vec(&GraphQLRequest {
         query: operation_def.clone(),
         operation_name: None,
-        variables: HashMap::new(),
+        variables: JsonMap::new(),
     })?;
 
     debug!("Query for seed {rng_seed}:\n{operation_def}");

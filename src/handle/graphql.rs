@@ -8,6 +8,8 @@ use apollo_compiler::{
     ExecutableDocument, Name, Node, Schema,
     ast::OperationType,
     executable::{Field, Selection, SelectionSet},
+    request::coerce_variable_values,
+    response::JsonMap,
     schema::ExtendedType,
     validation::{Valid, WithErrors},
 };
@@ -103,7 +105,7 @@ pub struct GraphQLRequest {
     pub query: String,
     pub operation_name: Option<String>,
     #[serde(default)]
-    pub variables: HashMap<String, Value>,
+    pub variables: JsonMap,
     // #[serde(default)]
     // extensions: serde_json::Map<String, Value>,
 }
@@ -161,7 +163,8 @@ async fn into_response_bytes_and_status_code(
     req: GraphQLRequest,
     query_hash: u64,
 ) -> (Bytes, StatusCode) {
-    let schema = SUPERGRAPH_SCHEMA.wait();
+    let lock = SUPERGRAPH_SCHEMA.read().expect("Schema lock");
+    let schema = lock.as_ref().expect("Schema should be loaded at startup");
 
     debug!(%query_hash, "handling graphql request");
     trace!(variables=?req.variables, "request variables");
@@ -188,16 +191,18 @@ async fn into_response_bytes_and_status_code(
     );
 
     let resp = match op.operation_type {
-        OperationType::Query => match generate_response(cfg, op_name, &doc, schema) {
-            Ok(resp) => resp,
-            Err(err) => {
-                error!(%err, "unable to generate response");
-                return (
-                    Bytes::from("unable to generate response"),
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                );
+        OperationType::Query => {
+            match generate_response(cfg, op_name, &doc, schema, &req.variables) {
+                Ok(resp) => resp,
+                Err(err) => {
+                    error!(%err, "unable to generate response");
+                    return (
+                        Bytes::from("unable to generate response"),
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                    );
+                }
             }
-        },
+        }
 
         // Not currently supporting mutations or subscriptions
         op_type => {
@@ -226,6 +231,7 @@ fn generate_response(
     op_name: Option<&str>,
     doc: &Valid<ExecutableDocument>,
     schema: &Valid<Schema>,
+    variables: &JsonMap,
 ) -> anyhow::Result<Value> {
     let op = match doc.operations.get(op_name) {
         Ok(op) => op,
@@ -237,6 +243,24 @@ fn generate_response(
         && rng.random_ratio(numerator, denominator)
     {
         return Ok(json!({ "data": null, "errors": [{ "message": "Request error simulated" }]}));
+    }
+
+    // Short-circuit introspection responses if a request is *only* introspection. This does mean that requests
+    // that combine both introspection and non-introspection fields in their query will get random data for
+    // the introspection fields. For our use-cases we only need correct introspection data if that is the only
+    // data being requested, but if we want to make this fully spec-compliant in the future we will need to merge
+    // the result of `partial_execute` with the random data generated on every query (which would be costlier).
+    if op.is_introspection(doc) {
+        return apollo_compiler::introspection::partial_execute(
+            schema,
+            &schema.implementers_map(),
+            doc,
+            op,
+            &coerce_variable_values(schema, op, variables)
+                .map_err(|err| anyhow!("{}", err.message()))?,
+        )
+        .map_err(|err| anyhow!("{}", err.message()))
+        .and_then(|result| serde_json_bytes::to_value(result).map_err(|err| anyhow!("{}", err)));
     }
 
     let mut data =
@@ -580,5 +604,60 @@ impl<'a, 'doc, 'schema> ResponseBuilder<'a, 'doc, 'schema> {
         } else {
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn introspection_short_circuits() -> anyhow::Result<()> {
+        let supergraph = include_str!("../../tests/data/schema.graphql");
+        let schema = Schema::parse_and_validate(supergraph, "schema.graphql")
+            .map_err(|err| anyhow!(err.errors.to_string()))?;
+
+        let query = r#"
+            query {
+                __schema {
+                    queryType {
+                        name
+                    }
+                    types {
+                        name
+                        kind
+                    }
+                }
+            }
+        "#;
+
+        let doc = ExecutableDocument::parse_and_validate(&schema, query, "query.graphql").unwrap();
+        let cfg = ResponseGenerationConfig::default();
+        let result = generate_response(&cfg, None, &doc, &schema, &JsonMap::new())?;
+
+        assert!(result.get("data").is_some());
+        let data = result.get("data").unwrap();
+        assert!(data.get("__schema").is_some());
+        // No other random data is included
+        assert!(data.as_object().unwrap().len() == 1);
+
+        let schema_obj = data.get("__schema").unwrap();
+        assert!(schema_obj.get("queryType").is_some());
+
+        let query_type = schema_obj.get("queryType").unwrap();
+        assert_eq!(query_type.get("name").unwrap().as_str().unwrap(), "Query");
+
+        let types = schema_obj.get("types").unwrap().as_array().unwrap();
+        assert!(!types.is_empty());
+
+        let type_names: Vec<&str> = types
+            .iter()
+            .filter_map(|t| t.get("name")?.as_str())
+            .collect();
+        assert!(type_names.contains(&"Query"));
+        assert!(type_names.contains(&"User"));
+        assert!(type_names.contains(&"Post"));
+
+        Ok(())
     }
 }

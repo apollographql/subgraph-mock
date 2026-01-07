@@ -39,7 +39,7 @@ async fn main() -> anyhow::Result<()> {
         }
     }));
 
-    let port = Args::parse().init()?;
+    let (port, _debouncer) = Args::parse().init()?;
     let listener = TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], port))).await?;
     info!(%port, "subgraph mock server now listening");
 
