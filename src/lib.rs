@@ -1,5 +1,5 @@
 use crate::{config::Config, handle::graphql::ResponseGenerationConfig, latency::LatencyGenerator};
-use anyhow::Error;
+use anyhow::{Error, anyhow};
 use apollo_compiler::{
     Node, Schema,
     ast::{FieldDefinition, InputValueDefinition, Type},
@@ -13,17 +13,20 @@ use apollo_compiler::{
     validation::Valid,
 };
 use hyper::{HeaderMap, header::HeaderValue};
+use lazy_static::lazy_static;
+use notify::{Config as NotifyConfig, Event, EventKind, PollWatcher, RecursiveMode, Watcher};
 use serde_yaml::Value;
 use std::{
     collections::HashMap,
     fs,
     path::PathBuf,
     sync::{
-        OnceLock,
+        Arc, OnceLock, RwLock,
         atomic::{AtomicBool, Ordering},
     },
+    time::Duration,
 };
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 pub mod config;
 pub mod handle;
@@ -32,8 +35,10 @@ pub mod latency;
 static RESPONSE_GENERATION_CONFIG: OnceLock<ResponseGenerationConfig> = OnceLock::new();
 static ADDITIONAL_HEADERS: OnceLock<HeaderMap<HeaderValue>> = OnceLock::new();
 static LATENCY_GENERATOR: OnceLock<LatencyGenerator> = OnceLock::new();
-static SUPERGRAPH_SCHEMA: OnceLock<Valid<Schema>> = OnceLock::new();
 static CACHE_RESPONSES: AtomicBool = AtomicBool::new(true);
+lazy_static! {
+    static ref SUPERGRAPH_SCHEMA: Arc<RwLock<Option<Valid<Schema>>>> = Arc::new(RwLock::new(None));
+}
 
 static SUBGRAPH_CACHE_RESPONSES: OnceLock<HashMap<String, bool>> = OnceLock::new();
 static SUBGRAPH_HEADERS: OnceLock<HashMap<String, HeaderMap<HeaderValue>>> = OnceLock::new();
@@ -60,7 +65,7 @@ pub struct Args {
 
 impl Args {
     /// Load and initialise the configuration based on command line args
-    pub fn init(self) -> anyhow::Result<u16> {
+    pub fn init(self) -> anyhow::Result<(u16, PollWatcher)> {
         let cfg = match self.config {
             Some(path) => {
                 info!(path=%path.display(), "loading and parsing config file");
@@ -139,29 +144,48 @@ impl Args {
         let (port, cache_responses, latency_generator, headers, response_generation) =
             cfg.into_parts();
 
-        info!(path=%self.schema.display(), "loading and parsing supergraph schema");
-        match Schema::parse(fs::read_to_string(&self.schema)?, self.schema) {
-            Ok(mut schema) => {
-                patch_supergraph(&mut schema);
-                match schema.validate() {
-                    Ok(schema) => SUPERGRAPH_SCHEMA.set(schema).unwrap(),
-                    Err(e) => panic!(
-                        "ERROR: invalid supergraph schema following patching\n{}",
-                        e.errors
-                    ),
-                }
-            }
+        parse_schema(&self.schema)?;
 
-            Err(e) => panic!("ERROR: invalid supergraph schema\n{}", e.errors),
-        };
+        // We have to use a PollWatcher because Docker on MacOS doesn't support filesystem events:
+        // https://docs.rs/notify/8.2.0/notify/index.html#docker-with-linux-on-macos-m1
+        let mut schema_watcher = PollWatcher::new(
+            |res: Result<Event, _>| match res {
+                Ok(event) => {
+                    if let EventKind::Modify(_) = event.kind
+                        && let Some(path) = event.paths.first()
+                        && let Err(err) = parse_schema(path)
+                    {
+                        error!("Failed to reload schema: {}", err);
+                    }
+                }
+                Err(errors) => {
+                    error!("Error watching schema file: {:?}", errors)
+                }
+            },
+            NotifyConfig::default()
+                .with_poll_interval(Duration::from_secs(1))
+                .with_compare_contents(true),
+        )?;
+        schema_watcher.watch(&self.schema, RecursiveMode::NonRecursive)?;
 
         RESPONSE_GENERATION_CONFIG.set(response_generation).unwrap();
         ADDITIONAL_HEADERS.set(headers).unwrap();
         LATENCY_GENERATOR.set(latency_generator).unwrap();
         CACHE_RESPONSES.store(cache_responses, Ordering::Relaxed);
 
-        Ok(port)
+        Ok((port, schema_watcher))
     }
+}
+
+fn parse_schema(path: &PathBuf) -> anyhow::Result<()> {
+    info!(path=%path.display(), "loading and parsing supergraph schema");
+    let mut schema = Schema::parse(fs::read_to_string(path)?, path).map_err(|err| anyhow!(err))?;
+    patch_supergraph(&mut schema);
+    let validated = schema.validate().map_err(|err| anyhow!(err))?;
+    *SUPERGRAPH_SCHEMA
+        .write()
+        .map_err(|_| anyhow!("Schema lock poisoned, cannot set new schema"))? = Some(validated);
+    Ok(())
 }
 
 /// A function for merging yaml overrides with the base config. This differs slightly from rtf-config in that

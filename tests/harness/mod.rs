@@ -51,7 +51,7 @@ pub fn initialize(config_file_name: Option<&str>) -> anyhow::Result<u16> {
             .map(|name| PathBuf::from(format!("{pkg_root}/tests/data/config/{name}"))),
         schema: PathBuf::from(format!("{pkg_root}/tests/data/schema.graphql")),
     };
-    args.init()
+    args.init().map(|(port, _)| port)
 }
 
 /// Cached supergraph document that is used as the basis for generating requests
