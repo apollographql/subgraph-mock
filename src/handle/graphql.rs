@@ -1,7 +1,6 @@
 use crate::{
-    ADDITIONAL_HEADERS, CACHE_RESPONSES, RESPONSE_GENERATION_CONFIG, SUBGRAPH_CACHE_RESPONSES,
-    SUBGRAPH_HEADERS, SUBGRAPH_RESPONSE_GENERATION_CONFIGS, SUPERGRAPH_SCHEMA,
     handle::ByteResponse,
+    state::{Config, State},
 };
 use anyhow::anyhow;
 use apollo_compiler::{
@@ -20,6 +19,7 @@ use hyper::{
     body::Bytes,
     header::{HeaderName, HeaderValue},
 };
+use ordered_float::OrderedFloat;
 use rand::{Rng, rngs::ThreadRng, seq::IteratorRandom};
 use serde::{Deserialize, Serialize};
 use serde_json_bytes::{
@@ -27,17 +27,18 @@ use serde_json_bytes::{
     serde_json::{self, Number},
 };
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     hash::{DefaultHasher, Hash, Hasher},
     mem,
     ops::RangeInclusive,
-    sync::atomic::Ordering,
+    sync::Arc,
 };
 use tracing::{debug, error, trace};
 
 pub async fn handle(
     body_bytes: Vec<u8>,
     subgraph_name: Option<&str>,
+    state: Arc<State>,
 ) -> anyhow::Result<ByteResponse> {
     let req: GraphQLRequest = match serde_json::from_slice(&body_bytes) {
         Ok(req) => req,
@@ -54,37 +55,36 @@ pub async fn handle(
         }
     };
 
+    let config = state.config.read().await;
+    let schema = state.schema.read().await;
+    let rgen_cfg = subgraph_name
+        .and_then(|name| config.subgraph_overrides.response_generation.get(name))
+        .unwrap_or_else(|| &config.response_generation);
+
+    // Since the response gen config and schema can be reloaded, they need to be included in the cache hash
+    // alongside the query itself. This does mean that hot reloads will balloon memory over time since the old
+    // values aren't invalidated. If we find this to actually be a practical problem in test scenarios that
+    // demand a high cardinality of config/schema setups, we can set up more intelligent caching with invalidation.
     let mut hasher = DefaultHasher::new();
     req.query.hash(&mut hasher);
-
-    let cfg = subgraph_name
-        .and_then(|name| {
-            SUBGRAPH_RESPONSE_GENERATION_CONFIGS
-                .wait()
-                .get(name)
-                // if this subgraph has an overridden response generation config, add the subgraph name to the hash
-                // so a response that conforms to the subgraph's config is added to the cache rather than re-using
-                // the standard cached response for this query
-                .inspect(|_| name.hash(&mut hasher))
-        })
-        .unwrap_or_else(|| RESPONSE_GENERATION_CONFIG.wait());
-
-    let query_hash = hasher.finish();
+    rgen_cfg.hash(&mut hasher);
+    schema.hash(&mut hasher);
+    let cache_hash = hasher.finish();
 
     let (bytes, status_code) = if subgraph_name
-        .and_then(|name| SUBGRAPH_CACHE_RESPONSES.wait().get(name).copied())
-        .unwrap_or_else(|| CACHE_RESPONSES.load(Ordering::Relaxed))
+        .and_then(|name| config.subgraph_overrides.cache_responses.get(name).copied())
+        .unwrap_or_else(|| config.cache_responses)
     {
-        into_response_bytes_and_status_code(cfg, req, query_hash).await
+        into_response_bytes_and_status_code(rgen_cfg, req, &schema.valid, cache_hash).await
     } else {
-        into_response_bytes_and_status_code_no_cache(cfg, req, query_hash).await
+        into_response_bytes_and_status_code_no_cache(rgen_cfg, req, &schema.valid, cache_hash).await
     };
 
     let mut resp = Response::new(Full::new(bytes).map_err(|never| match never {}).boxed());
     *resp.status_mut() = status_code;
 
     let headers = resp.headers_mut();
-    add_headers(cfg, subgraph_name, headers);
+    add_headers(&config, rgen_cfg, subgraph_name, headers);
 
     Ok(resp)
 }
@@ -101,7 +101,8 @@ pub struct GraphQLRequest {
 }
 
 fn add_headers(
-    cfg: &ResponseGenerationConfig,
+    config: &Config,
+    rgen_cfg: &ResponseGenerationConfig,
     subgraph_name: Option<&str>,
     headers: &mut HeaderMap,
 ) {
@@ -115,12 +116,12 @@ fn add_headers(
     let mut last_ratio: Option<(u32, u32)> = None;
 
     for (header_name, header_value) in subgraph_name
-        .and_then(|name| SUBGRAPH_HEADERS.wait().get(name).cloned())
-        .unwrap_or_else(|| ADDITIONAL_HEADERS.wait().clone())
+        .and_then(|name| config.subgraph_overrides.headers.get(name).cloned())
+        .unwrap_or_else(|| config.headers.clone())
         .into_iter()
     {
         if let Some(name) = header_name {
-            last_ratio = cfg.header_ratio.get(name.as_str()).copied();
+            last_ratio = rgen_cfg.header_ratio.get(name.as_str()).copied();
             last_header_name = name;
         }
 
@@ -135,11 +136,11 @@ fn add_headers(
     headers.insert("Content-Type", HeaderValue::from_static("application/json"));
 }
 
-#[cached(result = true, key = "u64", convert = "{_query_hash}")]
+#[cached(result = true, key = "u64", convert = "{_cache_hash}")]
 fn parse_and_validate(
     req: &GraphQLRequest,
     schema: &Valid<Schema>,
-    _query_hash: u64,
+    _cache_hash: u64,
 ) -> Result<Valid<ExecutableDocument>, WithErrors<ExecutableDocument>> {
     let op_name = req.operation_name.as_deref().unwrap_or("unknown");
 
@@ -147,19 +148,17 @@ fn parse_and_validate(
 }
 
 #[tracing::instrument(skip(req))]
-#[cached(key = "u64", convert = "{query_hash}")]
+#[cached(key = "u64", convert = "{cache_hash}")]
 async fn into_response_bytes_and_status_code(
     cfg: &ResponseGenerationConfig,
     req: GraphQLRequest,
-    query_hash: u64,
+    schema: &Valid<Schema>,
+    cache_hash: u64,
 ) -> (Bytes, StatusCode) {
-    let lock = SUPERGRAPH_SCHEMA.read().expect("Schema lock");
-    let schema = lock.as_ref().expect("Schema should be loaded at startup");
-
-    debug!(%query_hash, "handling graphql request");
+    debug!(%cache_hash, "handling graphql request");
     trace!(variables=?req.variables, "request variables");
 
-    let doc = match parse_and_validate(&req, schema, query_hash) {
+    let doc = match parse_and_validate(&req, schema, cache_hash) {
         Ok(doc) => doc,
         Err(err) => {
             let errs: Vec<_> = err.errors.iter().map(|d| d.to_json()).collect();
@@ -252,22 +251,22 @@ fn generate_response(
     Ok(json!({ "data": data }))
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Hash)]
 pub struct ResponseGenerationConfig {
     #[serde(default = "default_scalar_config")]
-    pub scalars: HashMap<String, ScalarGenerator>,
+    pub scalars: BTreeMap<String, ScalarGenerator>,
     #[serde(default = "default_array_size")]
     pub array: ArraySize,
     #[serde(default = "default_null_ratio")]
     pub null_ratio: Option<(u32, u32)>,
     #[serde(default)]
-    pub header_ratio: HashMap<String, (u32, u32)>,
+    pub header_ratio: BTreeMap<String, (u32, u32)>,
 }
 
 impl ResponseGenerationConfig {
     /// Merges the default scalar config with the provided config, allowing users to specify a partial set of scalar
     /// generators while inheriting the default configuration for those they do not specify.
-    pub fn merge_default_scalars(&mut self) {
+    pub(crate) fn merge_default_scalars(&mut self) {
         let default = default_scalar_config();
         let provided = mem::replace(&mut self.scalars, default);
         self.scalars.extend(provided);
@@ -280,12 +279,12 @@ impl Default for ResponseGenerationConfig {
             scalars: default_scalar_config(),
             array: default_array_size(),
             null_ratio: default_null_ratio(),
-            header_ratio: HashMap::new(),
+            header_ratio: BTreeMap::new(),
         }
     }
 }
 
-fn default_scalar_config() -> HashMap<String, ScalarGenerator> {
+fn default_scalar_config() -> BTreeMap<String, ScalarGenerator> {
     [
         ("Boolean".into(), ScalarGenerator::Bool),
         ("Int".into(), ScalarGenerator::Int { min: 0, max: 100 }),
@@ -293,8 +292,8 @@ fn default_scalar_config() -> HashMap<String, ScalarGenerator> {
         (
             "Float".into(),
             ScalarGenerator::Float {
-                min: -1.0,
-                max: 1.0,
+                min: OrderedFloat(-1.0),
+                max: OrderedFloat(1.0),
             },
         ),
         (
@@ -320,13 +319,22 @@ fn default_null_ratio() -> Option<(u32, u32)> {
     Some((1, 2))
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Hash)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ScalarGenerator {
     Bool,
-    Float { min: f64, max: f64 },
-    Int { min: i32, max: i32 },
-    String { min_len: usize, max_len: usize },
+    Float {
+        min: OrderedFloat<f64>,
+        max: OrderedFloat<f64>,
+    },
+    Int {
+        min: i32,
+        max: i32,
+    },
+    String {
+        min_len: usize,
+        max_len: usize,
+    },
 }
 
 impl Default for ScalarGenerator {
@@ -347,7 +355,7 @@ impl ScalarGenerator {
             Self::Int { min, max } => Value::Number(rng.random_range(min..=max).into()),
 
             Self::Float { min, max } => Value::Number(
-                Number::from_f64(rng.random_range(min..=max)).expect("expected finite float"),
+                Number::from_f64(rng.random_range(*min..=*max)).expect("expected finite float"),
             ),
 
             // The default Arbitrary impl for String has a random length so we build based on
@@ -368,7 +376,7 @@ impl ScalarGenerator {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Hash)]
 pub struct ArraySize {
     pub min_length: usize,
     pub max_length: usize,

@@ -1,54 +1,17 @@
-use crate::{config::Config, handle::graphql::ResponseGenerationConfig, latency::LatencyGenerator};
-use anyhow::{Error, anyhow};
-use apollo_compiler::{
-    Node, Schema,
-    ast::{FieldDefinition, InputValueDefinition, Type},
-    collections::IndexSet,
-    name,
-    schema::{
-        Component, ComponentName, ComponentOrigin, DirectiveDefinition, DirectiveLocation,
-        ExtendedType, ScalarType, UnionType,
-    },
-    ty,
-    validation::Valid,
+use handle::handle_request;
+use hyper::service::service_fn;
+use hyper_util::{
+    rt::{TokioExecutor, TokioIo},
+    server::conn::auto::Builder,
 };
-use hyper::{HeaderMap, header::HeaderValue};
-use lazy_static::lazy_static;
-use notify::{Config as NotifyConfig, Event, EventKind, PollWatcher, RecursiveMode, Watcher};
-use serde_yaml::Value;
-use std::{
-    collections::HashMap,
-    fs,
-    path::PathBuf,
-    sync::{
-        Arc, OnceLock, RwLock,
-        atomic::{AtomicBool, Ordering},
-    },
-    time::Duration,
-};
-use tracing::{error, info, warn};
+use state::{Config, State, default_port};
+use std::{fs, net::SocketAddr, path::PathBuf, sync::Arc};
+use tokio::net::TcpListener;
+use tracing::{error, info};
 
-pub mod config;
 pub mod handle;
 pub mod latency;
-
-static RESPONSE_GENERATION_CONFIG: OnceLock<ResponseGenerationConfig> = OnceLock::new();
-static ADDITIONAL_HEADERS: OnceLock<HeaderMap<HeaderValue>> = OnceLock::new();
-static LATENCY_GENERATOR: OnceLock<LatencyGenerator> = OnceLock::new();
-static CACHE_RESPONSES: AtomicBool = AtomicBool::new(true);
-lazy_static! {
-    static ref SUPERGRAPH_SCHEMA: Arc<RwLock<Option<Valid<Schema>>>> = Arc::new(RwLock::new(None));
-}
-
-static SUBGRAPH_CACHE_RESPONSES: OnceLock<HashMap<String, bool>> = OnceLock::new();
-static SUBGRAPH_HEADERS: OnceLock<HashMap<String, HeaderMap<HeaderValue>>> = OnceLock::new();
-static SUBGRAPH_LATENCY_GENERATORS: OnceLock<HashMap<String, LatencyGenerator>> = OnceLock::new();
-static SUBGRAPH_RESPONSE_GENERATION_CONFIGS: OnceLock<HashMap<String, ResponseGenerationConfig>> =
-    OnceLock::new();
-
-// Allowed in the YAML, but not represented in the actual Config struct as we
-// neither want nor need that data structure to be recursive.
-const SUBGRAPH_OVERRIDES_KEY: &str = "subgraph_overrides";
+pub mod state;
 
 /// A general purpose subgraph mock.
 #[derive(Debug, clap::Parser)]
@@ -65,296 +28,40 @@ pub struct Args {
 
 impl Args {
     /// Load and initialise the configuration based on command line args
-    pub fn init(self) -> anyhow::Result<(u16, PollWatcher)> {
-        let cfg = match self.config {
+    pub fn init(self) -> anyhow::Result<(u16, State)> {
+        let (port, config) = match self.config {
             Some(path) => {
                 info!(path=%path.display(), "loading and parsing config file");
-                let mut base: Value = serde_yaml::from_slice(&fs::read(path)?)?;
-                let mapping = base
-                    .as_mapping_mut()
-                    .ok_or_else(|| Error::msg("config file must be a mapping"))?;
-
-                let mut subgraph_cache_responses = HashMap::new();
-                let mut subgraph_headers = HashMap::new();
-                let mut subgraph_latency_generators = HashMap::new();
-                let mut subgraph_response_generation_configs = HashMap::new();
-
-                if let Some(overrides) = mapping.remove(SUBGRAPH_OVERRIDES_KEY) {
-                    match overrides {
-                        Value::Mapping(mapping) => {
-                            for (subgraph_name, subgraph_override) in mapping {
-                                let mut subgraph_config = base.clone();
-
-                                let override_mapping =
-                                    subgraph_override.as_mapping().ok_or_else(|| {
-                                        Error::msg("subgraph override must be a mapping")
-                                    })?;
-
-                                if override_mapping.contains_key("port") {
-                                    warn!("port overrides for subgraphs will be ignored")
-                                }
-
-                                merge_yaml(subgraph_override, &mut subgraph_config);
-                                let parsed_config: Config =
-                                    serde_yaml::from_value(subgraph_config)?;
-                                let subgraph_name: String = serde_yaml::from_value(subgraph_name)?;
-
-                                info!("generating customized config for {}", subgraph_name);
-                                let (
-                                    _port,
-                                    cache_responses,
-                                    latency_generator,
-                                    headers,
-                                    response_generation,
-                                ) = parsed_config.into_parts();
-
-                                subgraph_cache_responses
-                                    .insert(subgraph_name.clone(), cache_responses);
-                                subgraph_latency_generators
-                                    .insert(subgraph_name.clone(), latency_generator);
-                                subgraph_headers.insert(subgraph_name.clone(), headers);
-                                subgraph_response_generation_configs
-                                    .insert(subgraph_name, response_generation);
-                            }
-                        }
-                        _ => return Err(Error::msg("config file must be a mapping")),
-                    }
-                }
-
-                SUBGRAPH_CACHE_RESPONSES
-                    .set(subgraph_cache_responses)
-                    .unwrap();
-                SUBGRAPH_HEADERS.set(subgraph_headers).unwrap();
-                SUBGRAPH_LATENCY_GENERATORS
-                    .set(subgraph_latency_generators)
-                    .unwrap();
-                SUBGRAPH_RESPONSE_GENERATION_CONFIGS
-                    .set(subgraph_response_generation_configs)
-                    .unwrap();
-
-                serde_yaml::from_value(base)?
+                Config::parse_yaml(serde_yaml::from_slice(&fs::read(path)?)?)?
             }
             None => {
                 info!("using default config");
-                Config::default()
+                (default_port(), Config::default())
             }
         };
 
-        info!("parsing default subgraph config");
-        let (port, cache_responses, latency_generator, headers, response_generation) =
-            cfg.into_parts();
-
-        parse_schema(&self.schema)?;
-
-        // We have to use a PollWatcher because Docker on MacOS doesn't support filesystem events:
-        // https://docs.rs/notify/8.2.0/notify/index.html#docker-with-linux-on-macos-m1
-        let mut schema_watcher = PollWatcher::new(
-            |res: Result<Event, _>| match res {
-                Ok(event) => {
-                    if let EventKind::Modify(_) = event.kind
-                        && let Some(path) = event.paths.first()
-                        && let Err(err) = parse_schema(path)
-                    {
-                        error!("Failed to reload schema: {}", err);
-                    }
-                }
-                Err(errors) => {
-                    error!("Error watching schema file: {:?}", errors)
-                }
-            },
-            NotifyConfig::default()
-                .with_poll_interval(Duration::from_secs(1))
-                .with_compare_contents(true),
-        )?;
-        schema_watcher.watch(&self.schema, RecursiveMode::NonRecursive)?;
-
-        RESPONSE_GENERATION_CONFIG.set(response_generation).unwrap();
-        ADDITIONAL_HEADERS.set(headers).unwrap();
-        LATENCY_GENERATOR.set(latency_generator).unwrap();
-        CACHE_RESPONSES.store(cache_responses, Ordering::Relaxed);
-
-        Ok((port, schema_watcher))
+        Ok((port, State::new(config, self.schema)?))
     }
 }
 
-fn parse_schema(path: &PathBuf) -> anyhow::Result<()> {
-    info!(path=%path.display(), "loading and parsing supergraph schema");
-    let mut schema = Schema::parse(fs::read_to_string(path)?, path).map_err(|err| anyhow!(err))?;
-    patch_supergraph(&mut schema);
-    let validated = schema.validate().map_err(|err| anyhow!(err))?;
-    *SUPERGRAPH_SCHEMA
-        .write()
-        .map_err(|_| anyhow!("Schema lock poisoned, cannot set new schema"))? = Some(validated);
-    Ok(())
-}
+/// Initialize configuration from the provided [Args] and run the server loop
+pub async fn mock_server_loop(port: u16, state: State) -> anyhow::Result<()> {
+    let listener = TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], port))).await?;
+    info!(%port, "subgraph mock server now listening");
 
-/// A function for merging yaml overrides with the base config. This differs slightly from rtf-config in that
-/// it does *not* combine arrays, since arrays are effectively scalar values that should be replaced, not merged,
-/// in the context of the subgraph config. We may also want to revisit the mapping merge logic if it ends up being
-/// unintuitive in the context of configuration such as the latency waveforms.
-fn merge_yaml(overrides: serde_yaml::Value, base: &mut serde_yaml::Value) {
-    use serde_yaml::Value;
+    let state = Arc::new(state);
+    loop {
+        let (stream, _) = listener.accept().await?;
+        let io = TokioIo::new(stream);
 
-    match (overrides, base) {
-        // If both values are mappings we add all keys from src into dst.
-        (Value::Mapping(override_map), Value::Mapping(base_map)) => {
-            for (key, override_val) in override_map.into_iter() {
-                // If a key is present in both maps then we recursively merge the values,
-                // otherwise we just insert the src key into dst directly.
-                match base_map.get_mut(&key) {
-                    Some(base_val) => merge_yaml(override_val, base_val),
-                    None => _ = base_map.insert(key, override_val),
-                };
+        let state = state.clone();
+        tokio::spawn(async move {
+            if let Err(err) = Builder::new(TokioExecutor::new())
+                .serve_connection(io, service_fn(|req| handle_request(req, state.clone())))
+                .await
+            {
+                error!(%err, "server error");
             }
-        }
-
-        // Otherwise we replace base with overrides
-        (overrides, base) => *base = overrides,
+        });
     }
-}
-
-/// We need to be able to intercept and handle queries for entities:
-/// { _entities(representations: [_Any!]!): [_Entity]!
-///
-/// The router also auto-supports the @defer and @stream directive so schemas may be using them without
-/// importing / defining them directly. In that case we need to inject them into the schema in
-/// order for the validation of our queries to succeed.
-///
-/// See https://www.apollographql.com/docs/graphos/routing/operations/defer
-///
-/// The directive definitions are copied from here:
-///   https://github.com/apollographql/router/blob/23e580e22a4401cc2e7a952b241a1ec955b29c99/apollo-federation/src/api_schema.rs#L156https://github.com/apollographql/router/blob/23e580e22a4401cc2e7a952b241a1ec955b29c99/apollo-federation/src/api_schema.rs#L156
-fn patch_supergraph(schema: &mut Schema) {
-    // Grab _everything_ for our _Entity union. This is a lot more than the true _Entity union for
-    // any of the actual subgraphs but it at least means that we can correctly parse the queries
-    // coming from the client.
-    let members: IndexSet<ComponentName> = schema
-        .types
-        .iter()
-        .filter(|(_, ty)| ty.is_object())
-        .map(|(name, _)| ComponentName {
-            origin: ComponentOrigin::Definition,
-            name: name.clone(),
-        })
-        .collect();
-
-    // Inject our _Entity union
-    schema.types.insert(
-        name!("_Entity"),
-        ExtendedType::Union(Node::new(UnionType {
-            description: None,
-            name: name!("_Entity"),
-            directives: Default::default(),
-            members,
-        })),
-    );
-
-    // Inject our stub _Any scalar
-    schema.types.insert(
-        name!("_Any"),
-        ExtendedType::Scalar(Node::new(ScalarType {
-            description: None,
-            name: name!("_Any"),
-            directives: Default::default(),
-        })),
-    );
-
-    // Inject the _entities query itself
-    let query_type_name = &schema.schema_definition.query.as_ref().unwrap().name;
-    let query_root = match schema.types.get_mut(query_type_name).unwrap() {
-        ExtendedType::Object(obj) => obj,
-        _ => panic!("query root is not an object"),
-    };
-
-    query_root.make_mut().fields.insert(
-        name!("_entities"),
-        Component::new(FieldDefinition {
-            description: None,
-            name: name!("_entities"),
-            arguments: vec![Node::new(InputValueDefinition {
-                description: None,
-                name: name!("representations"),
-                ty: Node::new(Type::NonNullList(Box::new(Type::NonNullNamed(name!(
-                    "_Any"
-                ))))),
-                default_value: None,
-                directives: Default::default(),
-            })],
-            ty: Type::NonNullList(Box::new(Type::Named(name!("_Entity")))),
-            directives: Default::default(),
-        }),
-    );
-
-    // Matching the behaviour in the Router:
-    //   https://github.com/apollographql/router/blob/23e580e22a4401cc2e7a952b241a1ec955b29c99/apollo-federation/src/api_schema.rs#L139-L149
-    if !schema.directive_definitions.contains_key(&name!("defer")) {
-        schema
-            .directive_definitions
-            .insert(name!("defer"), defer_definition());
-    }
-    if !schema.directive_definitions.contains_key(&name!("stream")) {
-        schema
-            .directive_definitions
-            .insert(name!("stream"), stream_definition());
-    }
-}
-
-fn defer_definition() -> Node<DirectiveDefinition> {
-    Node::new(DirectiveDefinition {
-        description: None,
-        name: name!("defer"),
-        arguments: vec![
-            Node::new(InputValueDefinition {
-                description: None,
-                name: name!("label"),
-                ty: ty!(String).into(),
-                default_value: None,
-                directives: Default::default(),
-            }),
-            Node::new(InputValueDefinition {
-                description: None,
-                name: name!("if"),
-                ty: ty!(Boolean!).into(),
-                default_value: Some(true.into()),
-                directives: Default::default(),
-            }),
-        ],
-        repeatable: false,
-        locations: vec![
-            DirectiveLocation::FragmentSpread,
-            DirectiveLocation::InlineFragment,
-        ],
-    })
-}
-
-fn stream_definition() -> Node<DirectiveDefinition> {
-    Node::new(DirectiveDefinition {
-        description: None,
-        name: name!("stream"),
-        arguments: vec![
-            Node::new(InputValueDefinition {
-                description: None,
-                name: name!("label"),
-                ty: ty!(String).into(),
-                default_value: None,
-                directives: Default::default(),
-            }),
-            Node::new(InputValueDefinition {
-                description: None,
-                name: name!("if"),
-                ty: ty!(Boolean!).into(),
-                default_value: Some(true.into()),
-                directives: Default::default(),
-            }),
-            Node::new(InputValueDefinition {
-                description: None,
-                name: name!("initialCount"),
-                ty: ty!(Int).into(),
-                default_value: Some(0.into()),
-                directives: Default::default(),
-            }),
-        ],
-        repeatable: false,
-        locations: vec![DirectiveLocation::Field],
-    })
 }

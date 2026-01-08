@@ -1,13 +1,7 @@
 use clap::Parser;
-use hyper::service::service_fn;
-use hyper_util::{
-    rt::{TokioExecutor, TokioIo},
-    server::conn::auto::Builder,
-};
-use std::{net::SocketAddr, panic::set_hook};
-use subgraph_mock::{Args, handle::handle_request};
-use tokio::net::TcpListener;
-use tracing::{error, info};
+use std::panic::set_hook;
+use subgraph_mock::{Args, mock_server_loop};
+use tracing::error;
 use tracing_subscriber::{
     filter::{EnvFilter, LevelFilter},
     fmt,
@@ -39,21 +33,6 @@ async fn main() -> anyhow::Result<()> {
         }
     }));
 
-    let (port, _debouncer) = Args::parse().init()?;
-    let listener = TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], port))).await?;
-    info!(%port, "subgraph mock server now listening");
-
-    loop {
-        let (stream, _) = listener.accept().await?;
-        let io = TokioIo::new(stream);
-
-        tokio::spawn(async move {
-            if let Err(err) = Builder::new(TokioExecutor::new())
-                .serve_connection(io, service_fn(handle_request))
-                .await
-            {
-                error!(%err, "server error");
-            }
-        });
-    }
+    let (port, state) = Args::parse().init()?;
+    mock_server_loop(port, state).await
 }

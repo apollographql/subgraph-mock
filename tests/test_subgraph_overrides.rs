@@ -4,10 +4,10 @@ mod harness;
 
 #[tokio::test]
 async fn subgraph_overrides() -> anyhow::Result<()> {
-    harness::initialize(Some("subgraph_override.yaml"))?;
+    let (_, state) = harness::initialize(Some("subgraph_override.yaml"))?;
 
-    let standard_response = make_request(18, None).await?;
-    let subgraph_response = make_request(18, Some("special_subgraph".to_owned())).await?;
+    let standard_response = make_request(18, state.clone(), None).await?;
+    let subgraph_response = make_request(18, state, Some("special_subgraph".to_owned())).await?;
 
     assert_eq!(
         standard_response

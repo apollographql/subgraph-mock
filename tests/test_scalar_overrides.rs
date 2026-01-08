@@ -4,12 +4,13 @@ mod harness;
 
 #[tokio::test]
 async fn custom_scalars() -> anyhow::Result<()> {
-    harness::initialize(Some("custom_scalars.yaml"))?;
+    let (port, state) = harness::initialize(Some("custom_scalars_and_port.yaml"))?;
+    assert_eq!(8042, port);
 
     let mut responses: Vec<Query> = Vec::with_capacity(100);
     for _ in 0..100 {
         // This produces a query that has all data types represented. To see it, run the test with RUST_LOG=debug.
-        let response = make_request(7, None).await?;
+        let response = make_request(7, state.clone(), None).await?;
         assert_eq!(200, response.status());
         responses.push(parse_response(response).await?);
     }
