@@ -6,7 +6,7 @@ use apollo_compiler::{
     name,
     schema::{
         Component, ComponentName, ComponentOrigin, DirectiveDefinition, DirectiveLocation,
-        ExtendedType, ScalarType, UnionType,
+        ExtendedType, ObjectType, ScalarType, UnionType,
     },
     ty,
     validation::Valid,
@@ -50,11 +50,15 @@ impl Hash for HashedSchema {
 pub fn update_schema(path: &PathBuf, lock: Arc<RwLock<HashedSchema>>) -> anyhow::Result<()> {
     let schema = HashedSchema::parse(path)?;
     *lock.blocking_write() = schema;
+    info!(path=%path.display(), "new supergraph schema loaded");
     Ok(())
 }
 
-/// We need to be able to intercept and handle queries for entities:
-/// { _entities(representations: [_Any!]!): [_Entity]!
+/// We need to be able to intercept and handle queries for entities and service:
+/// {
+///   _entities(representations: [_Any!]!): [_Entity]!
+///   _service: _Service!
+/// }
 ///
 /// The router also auto-supports the @defer and @stream directive so schemas may be using them without
 /// importing / defining them directly. In that case we need to inject them into the schema in
@@ -86,6 +90,34 @@ fn patch_supergraph(schema: &mut Schema) -> anyhow::Result<()> {
             name: name!("_Entity"),
             directives: Default::default(),
             members,
+        })),
+    );
+
+    let fields = vec![(
+        name!("sdl"),
+        Component {
+            origin: ComponentOrigin::Definition,
+            node: Node::new(FieldDefinition {
+                description: None,
+                name: name!("sdl"),
+                arguments: Default::default(),
+                ty: Type::NonNullNamed(name!("String")),
+                directives: Default::default(),
+            }),
+        },
+    )]
+    .into_iter()
+    .collect();
+
+    // Inject the _Service type
+    schema.types.insert(
+        name!("_Service"),
+        ExtendedType::Object(Node::new(ObjectType {
+            description: None,
+            name: name!("_Service"),
+            fields,
+            implements_interfaces: Default::default(),
+            directives: Default::default(),
         })),
     );
 
@@ -121,6 +153,17 @@ fn patch_supergraph(schema: &mut Schema) -> anyhow::Result<()> {
                 directives: Default::default(),
             })],
             ty: Type::NonNullList(Box::new(Type::Named(name!("_Entity")))),
+            directives: Default::default(),
+        }),
+    );
+
+    query_root.make_mut().fields.insert(
+        name!("_service"),
+        Component::new(FieldDefinition {
+            description: None,
+            name: name!("_service"),
+            arguments: Default::default(),
+            ty: Type::NonNullList(Box::new(Type::Named(name!("_Service")))),
             directives: Default::default(),
         }),
     );
