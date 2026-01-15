@@ -29,11 +29,22 @@ provided. Invalid queries will be rejected with their validation errors included
 Introspection-only queries will be responded to with correct data, not random data. Mixed queries
 with both introspection and concrete data will be populated entirely with random data.
 
+#### Federation
+
+This mock server has partial Federation v2 support. It can understand and parse subgraph schemas
+that use the built-in Federation v2 directives. It does not currently do any actual resolution of
+the `@link` directive, so any imports or renames as specified in that directive will not work.
+
 #### Subgraph Overrides
 
 If your test scenario calls for behavioral differences between subgraphs, the mock server will
 respond using those subgraphs' specific configurations to requests made at `/<subgraph name>`
 instead of at `/`. See `example-config.yaml` for details on how to specify these overrides.
+
+If the server is started with a federated supergraph schema, it will not infer subgraph-specific
+schemas for any requests to the subgraph-overridden endpoints. The subgraph endpoints only inherit
+behavioral differences, and still operate under the full provided schema for all validation and
+introspection purposes.
 
 #### Non-federated Usage
 
