@@ -1,6 +1,6 @@
 use crate::{
     handle::ByteResponse,
-    state::{Config, State},
+    state::{Config, FederatedSchema, State},
 };
 use anyhow::anyhow;
 use apollo_compiler::{
@@ -85,9 +85,9 @@ pub async fn handle(
         .and_then(|name| config.subgraph_overrides.cache_responses.get(name).copied())
         .unwrap_or_else(|| config.cache_responses)
     {
-        into_response_bytes_and_status_code(rgen_cfg, req, &schema.valid, cache_hash).await
+        into_response_bytes_and_status_code(rgen_cfg, req, &schema, cache_hash).await
     } else {
-        into_response_bytes_and_status_code_no_cache(rgen_cfg, req, &schema.valid, cache_hash).await
+        into_response_bytes_and_status_code_no_cache(rgen_cfg, req, &schema, cache_hash).await
     };
 
     let mut resp = Response::new(Full::new(bytes).map_err(|never| match never {}).boxed());
@@ -171,7 +171,7 @@ fn parse_and_validate(
 async fn into_response_bytes_and_status_code(
     cfg: &ResponseGenerationConfig,
     req: GraphQLRequest,
-    schema: &Valid<Schema>,
+    schema: &FederatedSchema,
     cache_hash: u64,
 ) -> (Bytes, StatusCode) {
     debug!(%cache_hash, "handling graphql request");
@@ -238,7 +238,7 @@ fn generate_response(
     cfg: &ResponseGenerationConfig,
     op_name: Option<&str>,
     doc: &Valid<ExecutableDocument>,
-    schema: &Valid<Schema>,
+    schema: &FederatedSchema,
     variables: &JsonMap,
 ) -> anyhow::Result<Value> {
     let op = match doc.operations.get(op_name) {
@@ -469,7 +469,7 @@ impl ArraySize {
 struct ResponseBuilder<'a, 'doc, 'schema> {
     rng: &'a mut ThreadRng,
     doc: &'doc Valid<ExecutableDocument>,
-    schema: &'schema Valid<Schema>,
+    schema: &'schema FederatedSchema,
     cfg: &'a ResponseGenerationConfig,
 }
 
@@ -477,7 +477,7 @@ impl<'a, 'doc, 'schema> ResponseBuilder<'a, 'doc, 'schema> {
     fn new(
         rng: &'a mut ThreadRng,
         doc: &'doc Valid<ExecutableDocument>,
-        schema: &'schema Valid<Schema>,
+        schema: &'schema FederatedSchema,
         cfg: &'a ResponseGenerationConfig,
     ) -> Self {
         Self {
@@ -503,10 +503,7 @@ impl<'a, 'doc, 'schema> ResponseBuilder<'a, 'doc, 'schema> {
                 Value::String(ByteString::from(selection_set.ty.to_string()))
             } else if meta_field.name == "_service" {
                 let mut service_obj = Map::new();
-                service_obj.insert(
-                    "sdl".to_string(),
-                    Value::String(self.schema.to_string().into()),
-                );
+                service_obj.insert("sdl".to_string(), Value::String(self.schema.sdl().into()));
                 Value::Object(service_obj)
             } else if !meta_field.ty().is_non_null() && self.should_be_null() {
                 Value::Null
@@ -638,8 +635,7 @@ mod tests {
     #[test]
     fn introspection_short_circuits() -> anyhow::Result<()> {
         let supergraph = include_str!("../../tests/data/schema.graphql");
-        let schema = Schema::parse_and_validate(supergraph, "schema.graphql")
-            .map_err(|err| anyhow!(err.errors.to_string()))?;
+        let schema = FederatedSchema::parse_string(supergraph, "../../tests/data/schema.graphql")?;
 
         let query = r#"
             query {

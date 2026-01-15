@@ -8,19 +8,20 @@ mod schema;
 
 pub use config::Config;
 pub use config::default_port;
+pub use schema::FederatedSchema;
 
-use schema::{HashedSchema, update_schema};
+use schema::update_schema;
 
 pub struct State {
     pub config: Arc<RwLock<Config>>,
-    pub schema: Arc<RwLock<HashedSchema>>,
+    pub schema: Arc<RwLock<FederatedSchema>>,
     /// Handle to the pollwatcher that updates the schema for this config, so that it only drops out of scope when this state does
     _schema_watcher: PollWatcher,
 }
 
 impl State {
     pub fn new(config: Config, schema_path: PathBuf) -> anyhow::Result<Self> {
-        let schema = HashedSchema::parse(&schema_path)?;
+        let schema = FederatedSchema::parse(&schema_path)?;
         let schema = Arc::new(RwLock::new(schema));
 
         let lock = schema.clone();
