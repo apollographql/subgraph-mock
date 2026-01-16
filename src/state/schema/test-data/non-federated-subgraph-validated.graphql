@@ -1,0 +1,16 @@
+directive @tag(name: String!) repeatable on FIELD_DEFINITION
+
+type Query {
+  allPandas: [Panda]
+  panda(name: ID!): Panda
+  _service: _Service!
+}
+
+type Panda {
+  name: ID!
+  favoriteFood: String @tag(name: "nom-nom-nom")
+}
+
+type _Service {
+  sdl: String!
+}

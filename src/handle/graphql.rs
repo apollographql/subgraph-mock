@@ -680,4 +680,34 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn service_introspection_uses_raw_schema() -> anyhow::Result<()> {
+        let supergraph = include_str!("../../tests/data/schema.graphql");
+        let schema = FederatedSchema::parse_string(supergraph, "../../tests/data/schema.graphql")?;
+
+        let query = r#"
+            query {
+                _service {
+                    sdl
+                }
+            }
+        "#;
+
+        let doc = ExecutableDocument::parse_and_validate(&schema, query, "query.graphql").unwrap();
+        let cfg = ResponseGenerationConfig::default();
+        let result = generate_response(&cfg, None, &doc, &schema, &JsonMap::new())?;
+
+        assert!(result.get("data").is_some());
+        let data = result.get("data").unwrap();
+        assert!(data.get("_service").is_some());
+
+        let schema_obj = data.get("_service").unwrap();
+        assert!(schema_obj.get("sdl").is_some());
+
+        let sdl = schema_obj.get("sdl").unwrap().as_str().unwrap();
+        assert_eq!(supergraph, sdl);
+
+        Ok(())
+    }
 }

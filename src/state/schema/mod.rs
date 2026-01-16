@@ -39,10 +39,10 @@ impl FederatedSchema {
     pub fn parse_string(source: impl ToString, path: impl AsRef<Path>) -> anyhow::Result<Self> {
         // Parse the raw AST as federation-compatible schemas won't start out as valid GraphQL
         let mut ast = Document::parse(source.to_string(), path).map_err(|err| anyhow!(err))?;
-        federation::patch_ast(&mut ast);
+        let federation_type = federation::patch_ast(&mut ast);
 
         let mut schema = ast.to_schema().map_err(|err| anyhow!(err))?;
-        federation::patch_schema(&mut schema)?;
+        federation::patch_schema(&mut schema, federation_type)?;
         Ok(Self {
             valid: schema.validate().map_err(|err| anyhow!(err))?,
             source: source.to_string(),
@@ -66,4 +66,48 @@ pub fn update_schema(path: &PathBuf, lock: Arc<RwLock<FederatedSchema>>) -> anyh
     *lock.blocking_write() = schema;
     info!(path=%path.display(), "new supergraph schema loaded");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn supergraph_schema_validates() -> anyhow::Result<()> {
+        let schema = include_str!("test-data/supergraph.graphql");
+        let validated = FederatedSchema::parse_string(schema, "test-data/supergraph.graphql")?;
+
+        assert_eq!(
+            include_str!("test-data/supergraph-validated.graphql"),
+            validated.to_string()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn federated_subgraph_schema_validates() -> anyhow::Result<()> {
+        let schema = include_str!("test-data/federated-subgraph.graphql");
+        let validated =
+            FederatedSchema::parse_string(schema, "test-data/federated-subgraph.graphql")?;
+
+        assert_eq!(
+            include_str!("test-data/federated-subgraph-validated.graphql"),
+            validated.to_string()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn non_federated_subgraph_schema_validates() -> anyhow::Result<()> {
+        let schema = include_str!("test-data/non-federated-subgraph.graphql");
+        let validated =
+            FederatedSchema::parse_string(schema, "test-data/non-federated-subgraph.graphql")?;
+
+        assert_eq!(
+            include_str!("test-data/non-federated-subgraph-validated.graphql"),
+            validated.to_string()
+        );
+        Ok(())
+    }
 }

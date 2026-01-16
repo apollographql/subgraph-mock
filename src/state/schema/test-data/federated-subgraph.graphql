@@ -1,0 +1,38 @@
+extend schema
+  @link(url: "https://specs.apollo.dev/federation/v2.0", import: ["@key", "@external", "@requires"])
+
+type Mutation {
+  cart: CartMutations
+}
+
+type CartMutations {
+  checkout(paymentMethodId: ID!): CheckoutResult
+  addVariantToCart(variantId: ID!, quantity: Int = 1): ResultWithMessage
+  removeVariantFromCart(variantId: ID!, quantity: Int = 1): ResultWithMessage
+}
+
+type ResultWithMessage {
+  successful: Boolean
+  message: String
+}
+
+type CheckoutResult {
+  successful: Boolean
+  orderID: ID
+}
+
+type User @key(fields: "id") {
+  id: ID!
+  cart: Cart
+}
+
+type Cart @key(fields: "userId") {
+  userId: ID!
+  items: [Variant]
+  subtotal: Float @requires(fields: "items { price }")
+}
+
+type Variant @key(fields: "id", resolvable: false) {
+  id: ID!
+  price: Float! @external
+}
