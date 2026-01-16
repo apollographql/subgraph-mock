@@ -13,7 +13,7 @@ use apollo_compiler::{
     validation::{Valid, WithErrors},
 };
 use cached::proc_macro::cached;
-use http_body_util::{BodyExt, Full};
+use http_body_util::{BodyExt, Empty, Full};
 use hyper::{
     HeaderMap, Response, StatusCode,
     body::Bytes,
@@ -27,7 +27,7 @@ use serde_json_bytes::{
     serde_json::{self, Number},
 };
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     hash::{DefaultHasher, Hash, Hasher},
     mem,
     ops::RangeInclusive,
@@ -71,6 +71,16 @@ pub async fn handle(
     schema.hash(&mut hasher);
     let cache_hash = hasher.finish();
 
+    if let Some((numerator, denominator)) = rgen_cfg.http_error_ratio {
+        let mut rng = rand::rng();
+        if rng.random_ratio(numerator, denominator) {
+            return Response::builder()
+                .status(rng.random_range(500..=504))
+                .body(Empty::new().map_err(|never| match never {}).boxed())
+                .map_err(|err| err.into());
+        }
+    }
+
     let (bytes, status_code) = if subgraph_name
         .and_then(|name| config.subgraph_overrides.cache_responses.get(name).copied())
         .unwrap_or_else(|| config.cache_responses)
@@ -113,7 +123,7 @@ fn add_headers(
     // Based on that contract, the first iteration will *always* yield a value so we can safely just initialize
     // this to a dummy value and trust that it will get overwritten instead of using an Option.
     let mut last_header_name: HeaderName = HeaderName::from_static("unused");
-    let mut last_ratio: Option<(u32, u32)> = None;
+    let mut last_ratio: Option<Ratio> = None;
 
     for (header_name, header_value) in subgraph_name
         .and_then(|name| config.subgraph_overrides.headers.get(name).cloned())
@@ -226,6 +236,13 @@ fn generate_response(
         Ok(op) => op,
         Err(_) => return Ok(json!({ "data": null })),
     };
+    let mut rng = rand::rng();
+
+    if let Some((numerator, denominator)) = cfg.graphql_errors.request_error_ratio
+        && rng.random_ratio(numerator, denominator)
+    {
+        return Ok(json!({ "data": null, "errors": [{ "message": "Request error simulated" }]}));
+    }
 
     // Short-circuit introspection responses if a request is *only* introspection. This does mean that requests
     // that combine both introspection and non-introspection fields in their query will get random data for
@@ -245,10 +262,56 @@ fn generate_response(
         .and_then(|result| serde_json_bytes::to_value(result).map_err(|err| anyhow!("{}", err)));
     }
 
-    let data = ResponseBuilder::new(&mut rand::rng(), doc, schema, cfg)
-        .selection_set(&op.selection_set)?;
+    let mut data =
+        ResponseBuilder::new(&mut rng, doc, schema, cfg).selection_set(&op.selection_set)?;
 
-    Ok(json!({ "data": data }))
+    // Select a random number of top-level fields to "fail" if we are going to have field errors. For the sake of
+    // simplicity and performance, we won't traverse deeper into the response object.
+    if let Some((numerator, denominator)) = cfg.graphql_errors.field_error_ratio
+        && rng.random_ratio(numerator, denominator)
+    {
+        let drop_count = rng.random_range(1..=data.len());
+        let sampled_keys = data.keys().cloned().choose_multiple(&mut rng, drop_count);
+        let to_drop: HashSet<ByteString> = HashSet::from_iter(sampled_keys);
+
+        data.retain(|key, _| !to_drop.contains(key));
+
+        let errors: Vec<Value> = to_drop
+            .into_iter()
+            .map(|key| {
+                json!({
+                    "message": "Field error simulated",
+                    "path": [key]
+                })
+            })
+            .collect();
+
+        Ok(json!({
+            "data": data,
+            "errors": errors,
+        }))
+    } else {
+        Ok(json!({ "data": data }))
+    }
+}
+
+pub type Ratio = (u32, u32);
+
+#[derive(Debug, Default, Clone, Hash, Serialize, Deserialize)]
+pub struct GraphQLErrorConfig {
+    /// The ratio of GraphQL requests that should be responded to with a request error and no data.
+    ///
+    /// Defaults to no requests containing errors.
+    pub request_error_ratio: Option<Ratio>,
+    /// The ratio of GraphQL requests that should include field-level errors and partial data.
+    /// Note that if both this field and the request error ratio are set, this ratio will be applicable
+    /// to the subset of requests that do not have request errors.
+    ///
+    /// For example, if you have a `request_error_ratio` of `[1,3]`, and a `field_error_ratio` of `[1,4]`,
+    /// then only 1 in 6 of your total requests will contain field errors.
+    ///
+    /// Defaults to no requests containing errors.
+    pub field_error_ratio: Option<Ratio>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Hash)]
@@ -258,9 +321,13 @@ pub struct ResponseGenerationConfig {
     #[serde(default = "default_array_size")]
     pub array: ArraySize,
     #[serde(default = "default_null_ratio")]
-    pub null_ratio: Option<(u32, u32)>,
+    pub null_ratio: Option<Ratio>,
     #[serde(default)]
     pub header_ratio: BTreeMap<String, (u32, u32)>,
+    #[serde(default)]
+    pub http_error_ratio: Option<Ratio>,
+    #[serde(default)]
+    pub graphql_errors: GraphQLErrorConfig,
 }
 
 impl ResponseGenerationConfig {
@@ -280,6 +347,8 @@ impl Default for ResponseGenerationConfig {
             array: default_array_size(),
             null_ratio: default_null_ratio(),
             header_ratio: BTreeMap::new(),
+            graphql_errors: GraphQLErrorConfig::default(),
+            http_error_ratio: None,
         }
     }
 }
@@ -315,7 +384,7 @@ fn default_array_size() -> ArraySize {
     }
 }
 
-fn default_null_ratio() -> Option<(u32, u32)> {
+fn default_null_ratio() -> Option<Ratio> {
     Some((1, 2))
 }
 

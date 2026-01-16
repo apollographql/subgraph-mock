@@ -1,0 +1,7 @@
+cache_responses: false
+
+response_generation:
+  http_error_ratio: [1, 2]
+  graphql_errors:
+    request_error_ratio: [1, 2]
+    field_error_ratio: [1, 2]

@@ -41,6 +41,18 @@ response_generation:
   array:
     min_length: 0
     max_length: 10
+  # Response error configurations. Note that these ratios are sequential.
+  # This means that if you set all 3 ratios, the HTTP errors ratio resolves first,
+  # then the GraphQL response errors will be a ratio of the successful HTTP requests,
+  # then the GraphQL field errors will be a ratio of the successful GraphQL responses.
+  #
+  # The ratio of requests that should fail with a HTTP 5xx error. Defaults to no failures.
+  http_error_ratio: [1, 10]
+  graphql_errors:
+    # The ratio of successful HTTP requests that should fail with a GraphQL request error and no data.
+    request_error_ratio: [1, 20]
+    # The ratio of successful GraphQL requests that should return partial data and field-level errors.
+    field_error_ratio: [1, 5]
   # Custom scalar generators. Below is the default setup for built-in
   # scalars plus "ID". Keys must exactly match the scalar name found
   # in the schema provided to the server, unmatched scalars will be

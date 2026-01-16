@@ -6,7 +6,7 @@ use apollo_smith::{Document, DocumentBuilder};
 use arbitrary::Unstructured;
 use cached::proc_macro::cached;
 use http_body_util::{BodyExt, Full};
-use hyper::{Request, Response, body::Bytes};
+use hyper::{Request, Response as HyperResponse, body::Bytes};
 use rand::{RngCore, SeedableRng, rngs::StdRng};
 use serde_json_bytes::{Value, serde_json};
 use std::{borrow::Borrow, path::PathBuf, sync::Arc};
@@ -133,30 +133,26 @@ where
         String::from_utf8_lossy(&bytes)
     );
 
-    let raw: Value = serde_json::from_slice(&bytes)?;
-    validate_response(
-        &generate_schema()?,
-        &operation_def,
-        raw.as_object()
-            .ok_or(anyhow!("response should be a JSON object"))?
-            .get("data")
-            .expect("response should have data"),
-    )
-    .map_err(|validation_errors| {
-        anyhow!(
-            validation_errors
-                .iter()
-                .map(|error| error.to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
-    })?;
+    if parts.status.is_success() {
+        let raw: Value = serde_json::from_slice(&bytes)?;
+        validate_response(&generate_schema()?, &operation_def, raw).map_err(
+            |validation_errors| {
+                anyhow!(
+                    validation_errors
+                        .iter()
+                        .map(|error| error.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            },
+        )?;
+    }
 
     let boxed_body = Full::new(bytes)
         .map_err(|infallible| match infallible {})
         .boxed();
 
-    Ok(Response::from_parts(parts, boxed_body))
+    Ok(HyperResponse::from_parts(parts, boxed_body))
 }
 
 /// Run a single request with a timed lifecycle and assert that the generated latency for it matches
