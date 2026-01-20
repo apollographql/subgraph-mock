@@ -8,9 +8,6 @@ on:
       version_number:
         description: "The version number which the given commit SHA will be published as"
 
-env:
-  REGISTRY: ghcr.io
-
 jobs:
   release-subgraph-mock-image:
     runs-on: ubuntu-latest
