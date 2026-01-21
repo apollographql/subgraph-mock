@@ -1,0 +1,33 @@
+name: Release Subgraph Mock
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: "The commit SHA to be released"
+      version_number:
+        description: "The version number which the given commit SHA will be published as"
+
+jobs:
+  release-subgraph-mock-image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+
+    steps:
+      - uses: apollographql/release-tooling/release-internal@jr/story/RR-505-releasing
+        name: "Release to internal repositories"
+        with:
+          commit_sha: ${{ inputs.commit_sha }}
+          image_name: "subgraph-mock"
+          version_number: ${{ inputs.version_number }}
+      - uses: apollographql/release-tooling/release-ghcr@jr/story/RR-505-releasing
+        name: "Release to GHCR"
+        with:
+          commit_sha: ${{ inputs.commit_sha }}
+          image_name: "subgraph-mock"
+          version_number: ${{ inputs.version_number }}
+
