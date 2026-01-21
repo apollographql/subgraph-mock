@@ -8,11 +8,11 @@ mod harness;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn error_ratios() -> anyhow::Result<()> {
-    harness::initialize(Some("error_ratios.yaml"))?;
+    let (_, state) = harness::initialize(Some("error_ratios.yaml"))?;
 
     let mut responses = Vec::with_capacity(4000);
     let mut requests: FuturesUnordered<_> = (0..4000)
-        .map(|_| async { make_request(72, None).await })
+        .map(|_| async { make_request(72, state.clone(), None).await })
         .collect();
 
     while let Some(response) = requests.next().await {

@@ -9,12 +9,12 @@ mod harness;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn custom_ratios() -> anyhow::Result<()> {
-    harness::initialize(Some("custom_ratios.yaml"))?;
+    let (_, state) = harness::initialize(Some("custom_ratios.yaml"))?;
 
     let mut responses = Vec::with_capacity(1000);
     let mut requests: FuturesUnordered<_> = (0..1000)
         .map(|_| async {
-            let response = make_request(1122833, None).await?;
+            let response = make_request(1122833, state.clone(), None).await?;
             ensure!(200 == response.status());
             Ok(response)
         })

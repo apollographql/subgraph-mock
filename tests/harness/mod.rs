@@ -9,10 +9,11 @@ use http_body_util::{BodyExt, Full};
 use hyper::{Request, Response as HyperResponse, body::Bytes};
 use rand::{RngCore, SeedableRng, rngs::StdRng};
 use serde_json_bytes::{Value, serde_json};
-use std::{borrow::Borrow, path::PathBuf};
+use std::{borrow::Borrow, path::PathBuf, sync::Arc};
 use subgraph_mock::{
     Args,
     handle::{ByteResponse, graphql::GraphQLRequest, handle_request},
+    state::State,
 };
 use tokio::time::{self, Duration, Instant};
 use tracing::debug;
@@ -26,24 +27,22 @@ mod response;
 
 pub use response::*;
 
-/// Initializes the global state of the mock server based on the optional config file name that maps to
-/// a YAML config located in `tests/data/config`. **Because these values are static, this function can only be
-/// invoked once per integration test suite.**
+/// Initializes the state of the mock server based on the optional config file name that maps to
+/// a YAML config located in `tests/data/config`.
 ///
 /// If no config file name is provided, the default will be used.
 ///
-/// Returns the port number that the server would have been mapped to, since that value is not actually
-/// contained within the state of the app and cannot be otherwise tested as such.
-pub fn initialize(config_file_name: Option<&str>) -> anyhow::Result<u16> {
-    tracing_subscriber::registry()
+/// Returns the port number that the server would have been mapped to and the initialized State.
+pub fn initialize(config_file_name: Option<&str>) -> anyhow::Result<(u16, Arc<State>)> {
+    // if tracing is already initialized, let it silently error
+    let _ = tracing_subscriber::registry()
         .with(fmt::layer().compact())
         .with(
             EnvFilter::builder()
                 .with_default_directive(LevelFilter::OFF.into())
                 .from_env_lossy(),
         )
-        .try_init()
-        .expect("unable to set a global tracing subscriber");
+        .try_init();
 
     let pkg_root = env!("CARGO_MANIFEST_DIR");
     let args = Args {
@@ -51,7 +50,7 @@ pub fn initialize(config_file_name: Option<&str>) -> anyhow::Result<u16> {
             .map(|name| PathBuf::from(format!("{pkg_root}/tests/data/config/{name}"))),
         schema: PathBuf::from(format!("{pkg_root}/tests/data/schema.graphql")),
     };
-    args.init().map(|(port, _)| port)
+    args.init().map(|(port, state)| (port, Arc::new(state)))
 }
 
 /// Cached supergraph document that is used as the basis for generating requests
@@ -87,7 +86,11 @@ fn generate_schema() -> anyhow::Result<Valid<Schema>> {
 /// to then make assumptions about the structure of your responses in the test.
 ///
 /// Borrows heavily from the example in the apollo-smith docs.
-pub async fn make_request<T>(rng_seed: u64, subgraph_name: T) -> anyhow::Result<ByteResponse>
+pub async fn make_request<T>(
+    rng_seed: u64,
+    state: Arc<State>,
+    subgraph_name: T,
+) -> anyhow::Result<ByteResponse>
 where
     T: Borrow<Option<String>>,
 {
@@ -122,7 +125,7 @@ where
         .body(Full::<Bytes>::from(body))?;
 
     // Rip the body out, validate it, then repackage it to return
-    let (parts, body) = handle_request(req).await?.into_parts();
+    let (parts, body) = handle_request(req, state).await?.into_parts();
     let bytes = body.collect().await?.to_bytes();
 
     debug!(
@@ -154,12 +157,17 @@ where
 
 /// Run a single request with a timed lifecycle and assert that the generated latency for it matches
 /// `expected`. Returns the generated latency as a convenience for advancing time correctly as needed.
-async fn test_latency<T>(expected: u64, rng_seed: u64, subgraph_name: T) -> anyhow::Result<Duration>
+async fn test_latency<T>(
+    expected: u64,
+    rng_seed: u64,
+    state: Arc<State>,
+    subgraph_name: T,
+) -> anyhow::Result<Duration>
 where
     T: Borrow<Option<String>>,
 {
     let start = Instant::now();
-    let response = make_request(rng_seed, subgraph_name).await?;
+    let response = make_request(rng_seed, state, subgraph_name).await?;
     assert_eq!(200, response.status());
     let elapsed = start.elapsed();
     assert_eq!(Duration::from_millis(expected), elapsed);
@@ -175,29 +183,48 @@ where
 /// For details on how paused time works, see
 /// https://tokio.rs/tokio/topics/testing#pausing-and-resuming-time-in-tests
 pub async fn assert_is_sine<T>(
-    rng_seed: u64,
     base: u64,
     amplitude: u64,
     period: Duration,
+    rng_seed: u64,
+    state: Arc<State>,
     subgraph_name: T,
 ) -> anyhow::Result<()>
 where
     T: Borrow<Option<String>>,
 {
     // At t=0 seconds, our sine wave is halfway up its amplitude
-    let elapsed = test_latency(base + (amplitude / 2), rng_seed, subgraph_name.borrow()).await?;
+    let elapsed = test_latency(
+        base + (amplitude / 2),
+        rng_seed,
+        state.clone(),
+        subgraph_name.borrow(),
+    )
+    .await?;
 
     // Advancing half a period should put us at the same latency on the other side of the wave
     time::advance(period.div_f64(2.0) - elapsed).await;
-    let elapsed = test_latency(base + (amplitude / 2), rng_seed, subgraph_name.borrow()).await?;
+    let elapsed = test_latency(
+        base + (amplitude / 2),
+        rng_seed,
+        state.clone(),
+        subgraph_name.borrow(),
+    )
+    .await?;
 
     // Advancing a quarter period should put us at the bottom
     time::advance(period.div_f64(4.0) - elapsed).await;
-    let elapsed = test_latency(base, rng_seed, subgraph_name.borrow()).await?;
+    let elapsed = test_latency(base, rng_seed, state.clone(), subgraph_name.borrow()).await?;
 
     // Advancing a half period should put us at the top
     time::advance(period.div_f64(2.0) - elapsed).await;
-    test_latency(base + amplitude, rng_seed, subgraph_name.borrow()).await?;
+    test_latency(
+        base + amplitude,
+        rng_seed,
+        state.clone(),
+        subgraph_name.borrow(),
+    )
+    .await?;
 
     Ok(())
 }
@@ -210,33 +237,52 @@ where
 /// For details on how paused time works, see
 /// https://tokio.rs/tokio/topics/testing#pausing-and-resuming-time-in-tests
 pub async fn assert_is_square<T>(
-    rng_seed: u64,
     base: u64,
     amplitude: u64,
     period: Duration,
+    rng_seed: u64,
+    state: Arc<State>,
     subgraph_name: T,
 ) -> anyhow::Result<()>
 where
     T: Borrow<Option<String>>,
 {
     // At t=0 seconds, our square wave is at the top of the wave
-    let elapsed = test_latency(base + amplitude, rng_seed, subgraph_name.borrow()).await?;
+    let elapsed = test_latency(
+        base + amplitude,
+        rng_seed,
+        state.clone(),
+        subgraph_name.borrow(),
+    )
+    .await?;
 
     // Advancing a quarter period should still have the same value
     time::advance(period.div_f64(4.0) - elapsed).await;
-    let elapsed = test_latency(base + amplitude, rng_seed, subgraph_name.borrow()).await?;
+    let elapsed = test_latency(
+        base + amplitude,
+        rng_seed,
+        state.clone(),
+        subgraph_name.borrow(),
+    )
+    .await?;
 
     // Advancing another quarter period should drop to the bottom of the wave
     time::advance(period.div_f64(4.0) - elapsed).await;
-    let elapsed = test_latency(base, rng_seed, subgraph_name.borrow()).await?;
+    let elapsed = test_latency(base, rng_seed, state.clone(), subgraph_name.borrow()).await?;
 
     // Advancing another quarter period should stay at the bottom of the wave
     time::advance(period.div_f64(4.0) - elapsed).await;
-    let elapsed = test_latency(base, rng_seed, subgraph_name.borrow()).await?;
+    let elapsed = test_latency(base, rng_seed, state.clone(), subgraph_name.borrow()).await?;
 
     // Advancing another quarter period should go back to the top
     time::advance(period.div_f64(4.0) - elapsed).await;
-    test_latency(base + amplitude, rng_seed, subgraph_name.borrow()).await?;
+    test_latency(
+        base + amplitude,
+        rng_seed,
+        state.clone(),
+        subgraph_name.borrow(),
+    )
+    .await?;
 
     Ok(())
 }
@@ -249,31 +295,44 @@ where
 /// For details on how paused time works, see
 /// https://tokio.rs/tokio/topics/testing#pausing-and-resuming-time-in-tests
 pub async fn assert_is_saw<T>(
-    rng_seed: u64,
     base: u64,
     amplitude: u64,
     period: Duration,
+    rng_seed: u64,
+    state: Arc<State>,
     subgraph_name: T,
 ) -> anyhow::Result<()>
 where
     T: Borrow<Option<String>>,
 {
     // At t=0 seconds, our saw wave is at the bottom of the wave
-    let elapsed = test_latency(base, rng_seed, subgraph_name.borrow()).await?;
+    let elapsed = test_latency(base, rng_seed, state.clone(), subgraph_name.borrow()).await?;
 
     // Advancing a half period should move us halfway up the slope
     time::advance(period.div_f64(2.0) - elapsed).await;
-    let elapsed = test_latency(base + amplitude / 2, rng_seed, subgraph_name.borrow()).await?;
+    let elapsed = test_latency(
+        base + amplitude / 2,
+        rng_seed,
+        state.clone(),
+        subgraph_name.borrow(),
+    )
+    .await?;
 
     // Advancing another half period minus 1ms should hit the 'top'. By the nature of a saw wave, the drop from the
     // top and 0 are a straight line (effectively simultaneous). So our function will never actually hit amplitude
     // because it resets to 0 in that same tick of time.
     time::advance(period.div_f64(2.0) - elapsed - Duration::from_millis(1)).await;
-    test_latency(base + amplitude - 1, rng_seed, subgraph_name.borrow()).await?;
+    test_latency(
+        base + amplitude - 1,
+        rng_seed,
+        state.clone(),
+        subgraph_name.borrow(),
+    )
+    .await?;
 
     // Advancing 1ms should put us back at the bottom of the wave
     time::advance(Duration::from_millis(1)).await;
-    test_latency(base, rng_seed, subgraph_name.borrow()).await?;
+    test_latency(base, rng_seed, state.clone(), subgraph_name.borrow()).await?;
 
     Ok(())
 }
@@ -286,33 +345,52 @@ where
 /// For details on how paused time works, see
 /// https://tokio.rs/tokio/topics/testing#pausing-and-resuming-time-in-tests
 pub async fn assert_is_triangle<T>(
-    rng_seed: u64,
     base: u64,
     amplitude: u64,
     period: Duration,
+    rng_seed: u64,
+    state: Arc<State>,
     subgraph_name: T,
 ) -> anyhow::Result<()>
 where
     T: Borrow<Option<String>>,
 {
     // At t=0 seconds, our triangle wave is at the bottom of the wave
-    let elapsed = test_latency(base, rng_seed, subgraph_name.borrow()).await?;
+    let elapsed = test_latency(base, rng_seed, state.clone(), subgraph_name.borrow()).await?;
 
     // Advancing a quarter period should move us halfway up the slope
     time::advance(period.div_f64(4.0) - elapsed).await;
-    let elapsed = test_latency(base + amplitude / 2, rng_seed, subgraph_name.borrow()).await?;
+    let elapsed = test_latency(
+        base + amplitude / 2,
+        rng_seed,
+        state.clone(),
+        subgraph_name.borrow(),
+    )
+    .await?;
 
     // Advancing another quarter period should put us at the top
     time::advance(period.div_f64(4.0) - elapsed).await;
-    let elapsed = test_latency(base + amplitude, rng_seed, subgraph_name.borrow()).await?;
+    let elapsed = test_latency(
+        base + amplitude,
+        rng_seed,
+        state.clone(),
+        subgraph_name.borrow(),
+    )
+    .await?;
 
     // Advancing another quarter period should put us halfway down the slope
     time::advance(period.div_f64(4.0) - elapsed).await;
-    let elapsed = test_latency(base + amplitude / 2, rng_seed, subgraph_name.borrow()).await?;
+    let elapsed = test_latency(
+        base + amplitude / 2,
+        rng_seed,
+        state.clone(),
+        subgraph_name.borrow(),
+    )
+    .await?;
 
     // Advancing another quarter period should put us at the bottom of the slope
     time::advance(period.div_f64(4.0) - elapsed).await;
-    test_latency(base, rng_seed, subgraph_name.borrow()).await?;
+    test_latency(base, rng_seed, state.clone(), subgraph_name.borrow()).await?;
 
     Ok(())
 }
