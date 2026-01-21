@@ -52,9 +52,15 @@ enum link__Purpose {
 type Post @join__type(graph: POSTS, key: "id") @join__type(graph: USERS, key: "id") {
   id: ID!
   title: String! @join__field(graph: POSTS)
+  type: PostType! @join__field(graph: POSTS)
   content: String! @join__field(graph: POSTS) @join__field(graph: USERS, external: true)
   author: User! @join__field(graph: POSTS)
   featuredImage: String @join__field(graph: POSTS)
+}
+
+enum PostType @join__type(graph: POSTS) {
+  EPHEMERAL @join__enumValue(graph: POSTS)
+  PERMANENT @join__enumValue(graph: POSTS)
 }
 
 type Query @join__type(graph: POSTS) @join__type(graph: USERS) {

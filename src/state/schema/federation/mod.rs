@@ -97,11 +97,11 @@ pub fn patch_ast(ast: &mut Document) -> FederationType {
 /// The directive definitions are copied from here:
 ///   https://github.com/apollographql/router/blob/23e580e22a4401cc2e7a952b241a1ec955b29c99/apollo-federation/src/api_schema.rs#L156https://github.com/apollographql/router/blob/23e580e22a4401cc2e7a952b241a1ec955b29c99/apollo-federation/src/api_schema.rs#L156
 pub fn patch_schema(schema: &mut Schema, federation_type: FederationType) -> anyhow::Result<()> {
-    // Resolve federated types for the _Entity union.
+    // Resolve federated object types for the _Entity union.
     let members: IndexSet<ComponentName> = schema
         .types
         .iter()
-        .filter(|(_, ty)| is_federated_type(schema, ty))
+        .filter(|(_, ty)| ty.is_object() && is_federated_type(schema, ty))
         .map(|(name, _)| ComponentName {
             origin: ComponentOrigin::Definition,
             name: name.clone(),
