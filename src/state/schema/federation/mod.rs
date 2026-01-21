@@ -37,7 +37,7 @@ pub fn patch_ast(ast: &mut Document) -> FederationType {
     let fed_type = if ast
         .definitions
         .iter()
-        .any(|definion| definion.name().is_some_and(|name| name == "join__Graph"))
+        .any(|definition| definition.name().is_some_and(|name| name == "join__Graph"))
     {
         FederationType::Supergraph
     } else if let Some(extension) = schema_extension
