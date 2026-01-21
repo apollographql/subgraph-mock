@@ -19,30 +19,10 @@ jobs:
       id-token: write
 
     steps:
-      - name: Log in to the Container registry
-        uses: docker/login-action@v3
+      - uses: apollographql/release-tooling/build-and-publish@e887cd523cb87f27c9b5428803875e11e6173095
         with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata (tags, labels) for Docker
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ github.repository }}/subgraph-mock
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build and push Docker image
-        id: push
-        uses: docker/build-push-action@v6
-        with:
-          platforms: linux/x86_64, linux/arm64, macOS/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          context: ${{ github.workspace }}
+          dockerfile_location: ${{ github.workspace }}/Dockerfile
+          image_description: 'An image that allows us to mock subgraphs for testing purposes'
+          image_name: 'subgraph-mock'
+          platforms: 'linux/amd64,linux/arm64,macOS/arm64'
