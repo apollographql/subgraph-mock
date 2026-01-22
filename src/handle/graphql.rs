@@ -1,6 +1,6 @@
 use crate::{
     handle::ByteResponse,
-    state::{Config, State},
+    state::{Config, FederatedSchema, State},
 };
 use anyhow::anyhow;
 use apollo_compiler::{
@@ -21,7 +21,7 @@ use hyper::{
 };
 use ordered_float::OrderedFloat;
 use rand::{Rng, rngs::ThreadRng, seq::IteratorRandom};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json_bytes::{
     ByteString, Map, Value, json,
     serde_json::{self, Number},
@@ -85,9 +85,9 @@ pub async fn handle(
         .and_then(|name| config.subgraph_overrides.cache_responses.get(name).copied())
         .unwrap_or_else(|| config.cache_responses)
     {
-        into_response_bytes_and_status_code(rgen_cfg, req, &schema.valid, cache_hash).await
+        into_response_bytes_and_status_code(rgen_cfg, req, &schema, cache_hash).await
     } else {
-        into_response_bytes_and_status_code_no_cache(rgen_cfg, req, &schema.valid, cache_hash).await
+        into_response_bytes_and_status_code_no_cache(rgen_cfg, req, &schema, cache_hash).await
     };
 
     let mut resp = Response::new(Full::new(bytes).map_err(|never| match never {}).boxed());
@@ -105,9 +105,18 @@ pub struct GraphQLRequest {
     pub query: String,
     pub operation_name: Option<String>,
     #[serde(default)]
+    #[serde(deserialize_with = "null_or_missing_as_default")]
     pub variables: JsonMap,
-    // #[serde(default)]
-    // extensions: serde_json::Map<String, Value>,
+}
+
+/// Allows a field to be either null *or* not present in a request. Some GraphQL implementations
+/// specifically set variables to null rather than omitting them or providing an empty struct.
+fn null_or_missing_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 fn add_headers(
@@ -162,7 +171,7 @@ fn parse_and_validate(
 async fn into_response_bytes_and_status_code(
     cfg: &ResponseGenerationConfig,
     req: GraphQLRequest,
-    schema: &Valid<Schema>,
+    schema: &FederatedSchema,
     cache_hash: u64,
 ) -> (Bytes, StatusCode) {
     debug!(%cache_hash, "handling graphql request");
@@ -229,7 +238,7 @@ fn generate_response(
     cfg: &ResponseGenerationConfig,
     op_name: Option<&str>,
     doc: &Valid<ExecutableDocument>,
-    schema: &Valid<Schema>,
+    schema: &FederatedSchema,
     variables: &JsonMap,
 ) -> anyhow::Result<Value> {
     let op = match doc.operations.get(op_name) {
@@ -460,7 +469,7 @@ impl ArraySize {
 struct ResponseBuilder<'a, 'doc, 'schema> {
     rng: &'a mut ThreadRng,
     doc: &'doc Valid<ExecutableDocument>,
-    schema: &'schema Valid<Schema>,
+    schema: &'schema FederatedSchema,
     cfg: &'a ResponseGenerationConfig,
 }
 
@@ -468,7 +477,7 @@ impl<'a, 'doc, 'schema> ResponseBuilder<'a, 'doc, 'schema> {
     fn new(
         rng: &'a mut ThreadRng,
         doc: &'doc Valid<ExecutableDocument>,
-        schema: &'schema Valid<Schema>,
+        schema: &'schema FederatedSchema,
         cfg: &'a ResponseGenerationConfig,
     ) -> Self {
         Self {
@@ -492,6 +501,10 @@ impl<'a, 'doc, 'schema> ResponseBuilder<'a, 'doc, 'schema> {
 
             let val = if meta_field.name == "__typename" {
                 Value::String(ByteString::from(selection_set.ty.to_string()))
+            } else if meta_field.name == "_service" {
+                let mut service_obj = Map::new();
+                service_obj.insert("sdl".to_string(), Value::String(self.schema.sdl().into()));
+                Value::Object(service_obj)
             } else if !meta_field.ty().is_non_null() && self.should_be_null() {
                 Value::Null
             } else {
@@ -622,8 +635,7 @@ mod tests {
     #[test]
     fn introspection_short_circuits() -> anyhow::Result<()> {
         let supergraph = include_str!("../../tests/data/schema.graphql");
-        let schema = Schema::parse_and_validate(supergraph, "schema.graphql")
-            .map_err(|err| anyhow!(err.errors.to_string()))?;
+        let schema = FederatedSchema::parse_string(supergraph, "../../tests/data/schema.graphql")?;
 
         let query = r#"
             query {
@@ -665,6 +677,36 @@ mod tests {
         assert!(type_names.contains(&"Query"));
         assert!(type_names.contains(&"User"));
         assert!(type_names.contains(&"Post"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn service_introspection_uses_raw_schema() -> anyhow::Result<()> {
+        let supergraph = include_str!("../../tests/data/schema.graphql");
+        let schema = FederatedSchema::parse_string(supergraph, "../../tests/data/schema.graphql")?;
+
+        let query = r#"
+            query {
+                _service {
+                    sdl
+                }
+            }
+        "#;
+
+        let doc = ExecutableDocument::parse_and_validate(&schema, query, "query.graphql").unwrap();
+        let cfg = ResponseGenerationConfig::default();
+        let result = generate_response(&cfg, None, &doc, &schema, &JsonMap::new())?;
+
+        assert!(result.get("data").is_some());
+        let data = result.get("data").unwrap();
+        assert!(data.get("_service").is_some());
+
+        let schema_obj = data.get("_service").unwrap();
+        assert!(schema_obj.get("sdl").is_some());
+
+        let sdl = schema_obj.get("sdl").unwrap().as_str().unwrap();
+        assert_eq!(supergraph, sdl);
 
         Ok(())
     }
