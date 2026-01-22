@@ -1,7 +1,17 @@
 [package]
-name = "subgraph-mock"
-version = "0.1.0"
+authors = ["Apollo Developers <opensource@apollographql.com>"]
+categories = ["development-tools::testing", "web-programming::http-server"]
+description = """
+A standalone mock subgraph server designed to be placed behind a supergraph for testing.
+"""
+documentation = "https://docs.rs/subgraph-mock"
 edition = "2024"
+keywords = ["graphql", "mock-server", "apollo"]
+license = "MIT"
+name = "subgraph-mock"
+readme = "README.md"
+repository = "https://github.com/apollographql/subgraph-mock"
+version = "0.1.1"
 
 [workspace.dependencies]
 tokio = { version = "1.47.1", features = ["macros", "net", "parking_lot", "rt-multi-thread"] }
