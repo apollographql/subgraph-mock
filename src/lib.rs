@@ -44,7 +44,7 @@ impl Args {
     }
 }
 
-/// Initialize configuration from the provided [Args] and run the server loop
+/// Run the server loop with the provided [State]
 pub async fn mock_server_loop(port: u16, state: State) -> anyhow::Result<()> {
     let listener = TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], port))).await?;
     info!(%port, "subgraph mock server now listening");
