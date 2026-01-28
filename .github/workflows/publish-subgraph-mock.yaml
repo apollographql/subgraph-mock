@@ -19,7 +19,7 @@ jobs:
       id-token: write
 
     steps:
-      - uses: apollographql/release-tooling/build-and-publish@066868bea9ca1869c8765cd6bca0ddf9351b716e
+      - uses: apollographql/release-tooling/build-and-publish@d2167b7dd55fa968619dc09bbe47c1a7fdcc5700
         with:
           context: ${{ github.workspace }}
           dockerfile_location: ${{ github.workspace }}/Dockerfile
