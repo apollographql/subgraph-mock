@@ -443,7 +443,7 @@ impl ScalarGenerator {
                 // Allow for some multibyte chars. May still need to realloc
                 let mut chars = Vec::with_capacity(len * 2);
                 for _ in 0..len {
-                    chars.push(rng.random::<char>());
+                    chars.push(rng.sample(rand::distr::Alphanumeric) as char);
                 }
 
                 Value::String(ByteString::from(chars.into_iter().collect::<String>()))
