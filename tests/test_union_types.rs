@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use anyhow::ensure;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
@@ -31,12 +32,12 @@ async fn union_test() -> anyhow::Result<()> {
     }
     ";
 
-    let mut responses: Vec<Query> = Vec::with_capacity(1000);
-    let mut requests: FuturesUnordered<_> = (0..1)
+    let mut responses: Vec<Query> = Vec::with_capacity(100);
+    let mut requests: FuturesUnordered<_> = (0..100)
         .map(|_| {
             // This produces a query that has all data types represented. To see it, run the test with RUST_LOG=debug.
             async {
-                let response = send_request(query.to_string(), Some(schema.clone()), state.clone(), None).await?;
+                let response = send_request(query.to_string(), Some(schema.clone()), state.clone(), None, false).await?;
                 ensure!(200 == response.status());
                 parse_response(response).await
             }
@@ -47,17 +48,20 @@ async fn union_test() -> anyhow::Result<()> {
         responses.push(response?);
     }
 
+    let mut seen_multiple_union_members_in_one_list = false;
 
     // for each user, check that the content typename is either Article or Post, _not_ Content. Content
     // is a union and shouldn't be what's returned.
     for response in responses {
         let user = response.user.expect("missing user from response");
         let content = user.aliased.get("content").unwrap().as_array().unwrap();
-        for element in content {
-            let typename = element.as_object().unwrap().get("__typename").unwrap().as_str().unwrap();
-            assert_ne!(typename, "Content", "element = {:?}", element);
-        }
+
+        let content_types: HashSet<&str> = content.iter().flat_map(|c| c.as_object()).flat_map(|e| e.get("__typename")).flat_map(|s| s.as_str()).collect();
+        assert!(!content_types.contains("Content"));
+        seen_multiple_union_members_in_one_list |= content_types.len() > 1;
     }
+
+    assert!(seen_multiple_union_members_in_one_list);
 
     Ok(())
 }

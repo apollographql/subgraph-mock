@@ -33,6 +33,7 @@ use std::{
     ops::RangeInclusive,
     sync::Arc,
 };
+use apollo_compiler::schema::UnionType;
 use tracing::{debug, error, trace};
 
 pub async fn handle(
@@ -492,7 +493,14 @@ impl<'a, 'doc, 'schema> ResponseBuilder<'a, 'doc, 'schema> {
         &mut self,
         selection_set: &SelectionSet,
     ) -> anyhow::Result<Map<ByteString, Value>> {
-        let grouped_fields = self.collect_fields(selection_set)?;
+        // TODO: would like a way around the clone but need it for now to be able to mutate
+        let mut selection_set = selection_set.clone();
+        if let Some(union_schema_ty) =  self.schema.types.get(&selection_set.ty).and_then(|t| t.as_union()){
+            let arbitrary_type = self.arbitrary_union_member(union_schema_ty)?;
+            selection_set.ty = arbitrary_type;
+        }
+
+        let grouped_fields = self.collect_fields(&selection_set)?;
         let mut result = Map::new();
 
         for (key, fields) in grouped_fields {
@@ -560,6 +568,11 @@ impl<'a, 'doc, 'schema> ResponseBuilder<'a, 'doc, 'schema> {
                     }
                 }
                 Selection::InlineFragment(inline_fragment) => {
+                    if let Some(type_condition) = inline_fragment.type_condition.as_ref() && type_condition != &selection_set.ty {
+                        // skip this inline fragment - type condition mismatch
+                        continue;
+                    }
+
                     for (key, mut fields) in self.collect_fields(&inline_fragment.selection_set)? {
                         collected_fields.entry(key).or_default().append(&mut fields);
                     }
@@ -593,6 +606,12 @@ impl<'a, 'doc, 'schema> ResponseBuilder<'a, 'doc, 'schema> {
 
             _ => unreachable!("A field with an empty selection set must be a scalar or enum type"),
         }
+    }
+
+    fn arbitrary_union_member(&mut self, union_type: &UnionType) -> anyhow::Result<Name> {
+        let num_values = union_type.members.len();
+        let index = self.rng.random_range(0..num_values);
+        Ok(union_type.members.get_index(index).ok_or(anyhow!("Missing value"))?.name.clone())
     }
 
     fn arbitrary_array_len(&mut self) -> anyhow::Result<usize> {

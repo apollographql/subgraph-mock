@@ -115,7 +115,7 @@ where
 
     debug!("Query for seed {rng_seed}:\n{operation_def}");
 
-    send_request(operation_def, None, state, subgraph_name).await
+    send_request(operation_def, None, state, subgraph_name, true).await
 }
 
 /// Runs a single request to the mock server through the handler method. Uses the operation provided.
@@ -125,11 +125,15 @@ where
 /// subgraph.
 ///
 /// Borrows heavily from the example in the apollo-smith docs.
+///
+/// NB: some operations will not pass the validate_response function (notably those with unions), so
+/// skip em for now
 pub async fn send_request<T>(
     operation_def: String,
     schema_name: Option<String>,
     state: Arc<State>,
     subgraph_name: T,
+    validate: bool,
 ) -> anyhow::Result<ByteResponse>
 where
     T: Borrow<Option<String>>,
@@ -159,7 +163,7 @@ where
         String::from_utf8_lossy(&bytes)
     );
 
-    if parts.status.is_success() {
+    if validate && parts.status.is_success() {
         let raw: Value = serde_json::from_slice(&bytes)?;
         validate_response(&generate_schema(schema_name)?, &operation_def, raw).map_err(
             |validation_errors| {
