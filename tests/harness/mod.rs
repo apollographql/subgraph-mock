@@ -27,13 +27,19 @@ mod response;
 
 pub use response::*;
 
+fn schema_pathbuf<S: Into<String>>(schema_file_name: Option<S>) -> PathBuf {
+    let pkg_root = env!("CARGO_MANIFEST_DIR");
+    let schema_file_name = schema_file_name.map(|s| s.into()).unwrap_or("schema".to_string());
+    PathBuf::from(format!("{pkg_root}/tests/data/{schema_file_name}.graphql"))
+}
+
 /// Initializes the state of the mock server based on the optional config file name that maps to
 /// a YAML config located in `tests/data/config`.
 ///
 /// If no config file name is provided, the default will be used.
 ///
 /// Returns the port number that the server would have been mapped to and the initialized State.
-pub fn initialize(config_file_name: Option<&str>) -> anyhow::Result<(u16, Arc<State>)> {
+pub fn initialize(config_file_name: Option<&str>, schema_file_name: Option<&str>) -> anyhow::Result<(u16, Arc<State>)> {
     // if tracing is already initialized, let it silently error
     let _ = tracing_subscriber::registry()
         .with(fmt::layer().compact())
@@ -48,7 +54,7 @@ pub fn initialize(config_file_name: Option<&str>) -> anyhow::Result<(u16, Arc<St
     let args = Args {
         config: config_file_name
             .map(|name| PathBuf::from(format!("{pkg_root}/tests/data/config/{name}"))),
-        schema: PathBuf::from(format!("{pkg_root}/tests/data/schema.graphql")),
+        schema: schema_pathbuf(schema_file_name),
     };
     args.init().map(|(port, state)| (port, Arc::new(state)))
 }
@@ -70,8 +76,9 @@ fn generate_test_doc() -> anyhow::Result<Document> {
 
 /// Cached supergraph schema for response validation
 #[cached(result = true)]
-fn generate_schema() -> anyhow::Result<Valid<Schema>> {
-    let supergraph = include_str!("../data/schema.graphql");
+fn generate_schema(schema_file_name: Option<String>) -> anyhow::Result<Valid<Schema>> {
+    let path = schema_pathbuf(schema_file_name.as_ref());
+    let supergraph = std::fs::read_to_string(path).map_err(|err| anyhow!(err))?;
     Schema::parse_and_validate(supergraph, "schema.graphql")
         .map_err(|err| anyhow!(err.errors.to_string()))
 }
@@ -106,6 +113,27 @@ where
     let mut gql_doc = DocumentBuilder::with_document(&mut u, apollo_smith_doc)?;
     let operation_def: String = gql_doc.operation_definition()?.unwrap().into();
 
+    debug!("Query for seed {rng_seed}:\n{operation_def}");
+
+    send_request(operation_def, None, state, subgraph_name).await
+}
+
+/// Runs a single request to the mock server through the handler method. Uses the operation provided.
+/// Validates that the response was valid based on the provided operation.
+///
+/// If `subgraph_name` is [Some], this request will be sent to the mock as if it were a request to that specific
+/// subgraph.
+///
+/// Borrows heavily from the example in the apollo-smith docs.
+pub async fn send_request<T>(
+    operation_def: String,
+    schema_name: Option<String>,
+    state: Arc<State>,
+    subgraph_name: T,
+) -> anyhow::Result<ByteResponse>
+where
+    T: Borrow<Option<String>>,
+{
     let uri = match subgraph_name.borrow() {
         Some(name) => format!("/{name}"),
         None => "/".to_owned(),
@@ -117,8 +145,6 @@ where
         variables: JsonMap::new(),
     })?;
 
-    debug!("Query for seed {rng_seed}:\n{operation_def}");
-
     let req = Request::builder()
         .method("POST")
         .uri(uri)
@@ -129,13 +155,13 @@ where
     let bytes = body.collect().await?.to_bytes();
 
     debug!(
-        "Response for seed {rng_seed}:\n{}",
+        "Response:\n{}",
         String::from_utf8_lossy(&bytes)
     );
 
     if parts.status.is_success() {
         let raw: Value = serde_json::from_slice(&bytes)?;
-        validate_response(&generate_schema()?, &operation_def, raw).map_err(
+        validate_response(&generate_schema(schema_name)?, &operation_def, raw).map_err(
             |validation_errors| {
                 anyhow!(
                     validation_errors

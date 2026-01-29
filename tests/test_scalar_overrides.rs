@@ -4,7 +4,7 @@ mod harness;
 
 #[tokio::test]
 async fn custom_scalars() -> anyhow::Result<()> {
-    let (port, state) = harness::initialize(Some("custom_scalars_and_port.yaml"))?;
+    let (port, state) = harness::initialize(Some("custom_scalars_and_port.yaml"), None)?;
     assert_eq!(8042, port);
 
     let mut responses: Vec<Query> = Vec::with_capacity(100);

@@ -7,7 +7,7 @@ mod harness;
 /// https://tokio.rs/tokio/topics/testing#pausing-and-resuming-time-in-tests
 #[tokio::test(start_paused = true)]
 async fn saw_wave() -> anyhow::Result<()> {
-    let (_, state) = harness::initialize(Some("saw_wave.yaml"))?;
+    let (_, state) = harness::initialize(Some("saw_wave.yaml"), None)?;
     let rng_seed = 12;
 
     // The configured latency generator is a saw wave with a base value of 10 ms, an amplitude of 20ms,
@@ -17,7 +17,7 @@ async fn saw_wave() -> anyhow::Result<()> {
 
 #[tokio::test(start_paused = true)]
 async fn square_wave() -> anyhow::Result<()> {
-    let (_, state) = harness::initialize(Some("square_wave.yaml"))?;
+    let (_, state) = harness::initialize(Some("square_wave.yaml"), None)?;
     let rng_seed = 12;
 
     // The configured latency generator is a square wave with a base value of 10 ms, an amplitude of 5ms,
@@ -27,7 +27,7 @@ async fn square_wave() -> anyhow::Result<()> {
 
 #[tokio::test(start_paused = true)]
 async fn triangle_wave() -> anyhow::Result<()> {
-    let (_, state) = harness::initialize(Some("triangle_wave.yaml"))?;
+    let (_, state) = harness::initialize(Some("triangle_wave.yaml"), None)?;
     let rng_seed = 20;
 
     // The configured latency generator is a triangle wave with a base value of 0 ms, an amplitude of 10ms,
