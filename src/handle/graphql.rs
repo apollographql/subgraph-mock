@@ -167,7 +167,7 @@ fn parse_and_validate(
     ExecutableDocument::parse_and_validate(schema, &req.query, op_name)
 }
 
-#[tracing::instrument(skip(req))]
+#[tracing::instrument(skip(req, schema))]
 #[cached(key = "u64", convert = "{cache_hash}")]
 async fn into_response_bytes_and_status_code(
     cfg: &ResponseGenerationConfig,
@@ -175,7 +175,7 @@ async fn into_response_bytes_and_status_code(
     schema: &FederatedSchema,
     cache_hash: u64,
 ) -> (Bytes, StatusCode) {
-    debug!(%cache_hash, "handling graphql request");
+    debug!(%cache_hash, req.operation_name, "handling graphql request");
     trace!(variables=?req.variables, "request variables");
 
     let doc = match parse_and_validate(&req, schema, cache_hash) {
