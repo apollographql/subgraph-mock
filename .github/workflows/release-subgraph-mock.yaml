@@ -18,27 +18,9 @@ jobs:
       id-token: write
 
     steps:
-      - uses: apollographql/release-tooling/release-internal@c3f1e8e459a22e5dbd9ac6112f2125995bd890d8
-        name: "Release to internal repositories"
-        with:
-          commit_sha: ${{ inputs.commit_sha }}
-          image_name: "subgraph-mock"
-          version_number: ${{ inputs.version_number }}
-      - uses: apollographql/release-tooling/release-ghcr@c3f1e8e459a22e5dbd9ac6112f2125995bd890d8
-        name: "Release to GHCR"
-        with:
-          commit_sha: ${{ inputs.commit_sha }}
-          image_name: "subgraph-mock"
-          version_number: ${{ inputs.version_number }}
-  release-to-crates-io:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write # Required for OIDC token exchange
-    steps:
-      - uses: actions/checkout@v6
-      - uses: rust-lang/crates-io-auth-action@v1
-        id: auth
-      - run: cargo publish
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+    - uses: apollographql/release-tooling/release-dockerhub@c3f1e8e459a22e5dbd9ac6112f2125995bd890d8
+      name: "Release to DockerHub"
+      with:
+        commit_sha: ${{ inputs.commit_sha }}
+        image_name: "subgraph-mock"
+        version_number: ${{ inputs.version_number }}
