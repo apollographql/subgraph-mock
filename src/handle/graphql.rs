@@ -568,11 +568,8 @@ impl<'a, 'doc, 'schema> ResponseBuilder<'a, 'doc, 'schema> {
                     }
                 }
                 Selection::InlineFragment(inline_fragment) => {
-                    if let Some(type_condition) = inline_fragment.type_condition.as_ref() && type_condition != &selection_set.ty {
-                        // skip this inline fragment - type condition mismatch
-                        continue;
-                    }
-
+                    // NB: ignore inline fragment type conditions; if we add extra fields, the router
+                    // can filter them out for us
                     for (key, mut fields) in self.collect_fields(&inline_fragment.selection_set)? {
                         collected_fields.entry(key).or_default().append(&mut fields);
                     }
