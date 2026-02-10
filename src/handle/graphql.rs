@@ -3,6 +3,7 @@ use crate::{
     state::{Config, FederatedSchema, State},
 };
 use anyhow::anyhow;
+use apollo_compiler::schema::UnionType;
 use apollo_compiler::{
     ExecutableDocument, Name, Node, Schema,
     ast::OperationType,
@@ -33,7 +34,6 @@ use std::{
     ops::RangeInclusive,
     sync::Arc,
 };
-use apollo_compiler::schema::UnionType;
 use tracing::{debug, error, trace};
 
 pub async fn handle(
@@ -495,7 +495,12 @@ impl<'a, 'doc, 'schema> ResponseBuilder<'a, 'doc, 'schema> {
     ) -> anyhow::Result<Map<ByteString, Value>> {
         // TODO: would like a way around the clone but need it for now to be able to mutate
         let mut selection_set = selection_set.clone();
-        if let Some(union_schema_ty) =  self.schema.types.get(&selection_set.ty).and_then(|t| t.as_union()){
+        if let Some(union_schema_ty) = self
+            .schema
+            .types
+            .get(&selection_set.ty)
+            .and_then(|t| t.as_union())
+        {
             let arbitrary_type = self.arbitrary_union_member(union_schema_ty)?;
             selection_set.ty = arbitrary_type;
         }
@@ -608,7 +613,12 @@ impl<'a, 'doc, 'schema> ResponseBuilder<'a, 'doc, 'schema> {
     fn arbitrary_union_member(&mut self, union_type: &UnionType) -> anyhow::Result<Name> {
         let num_values = union_type.members.len();
         let index = self.rng.random_range(0..num_values);
-        Ok(union_type.members.get_index(index).ok_or(anyhow!("Missing value"))?.name.clone())
+        Ok(union_type
+            .members
+            .get_index(index)
+            .ok_or(anyhow!("Missing value"))?
+            .name
+            .clone())
     }
 
     fn arbitrary_array_len(&mut self) -> anyhow::Result<usize> {

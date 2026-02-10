@@ -29,7 +29,9 @@ pub use response::*;
 
 fn schema_pathbuf<S: Into<String>>(schema_file_name: Option<S>) -> PathBuf {
     let pkg_root = env!("CARGO_MANIFEST_DIR");
-    let schema_file_name = schema_file_name.map(|s| s.into()).unwrap_or("schema".to_string());
+    let schema_file_name = schema_file_name
+        .map(|s| s.into())
+        .unwrap_or("schema".to_string());
     PathBuf::from(format!("{pkg_root}/tests/data/{schema_file_name}.graphql"))
 }
 
@@ -39,7 +41,10 @@ fn schema_pathbuf<S: Into<String>>(schema_file_name: Option<S>) -> PathBuf {
 /// If no config file name is provided, the default will be used.
 ///
 /// Returns the port number that the server would have been mapped to and the initialized State.
-pub fn initialize(config_file_name: Option<&str>, schema_file_name: Option<&str>) -> anyhow::Result<(u16, Arc<State>)> {
+pub fn initialize(
+    config_file_name: Option<&str>,
+    schema_file_name: Option<&str>,
+) -> anyhow::Result<(u16, Arc<State>)> {
     // if tracing is already initialized, let it silently error
     let _ = tracing_subscriber::registry()
         .with(fmt::layer().compact())
@@ -158,10 +163,7 @@ where
     let (parts, body) = handle_request(req, state).await?.into_parts();
     let bytes = body.collect().await?.to_bytes();
 
-    debug!(
-        "Response:\n{}",
-        String::from_utf8_lossy(&bytes)
-    );
+    debug!("Response:\n{}", String::from_utf8_lossy(&bytes));
 
     if validate && parts.status.is_success() {
         let raw: Value = serde_json::from_slice(&bytes)?;

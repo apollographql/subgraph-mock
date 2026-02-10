@@ -1,8 +1,8 @@
-use std::collections::HashSet;
+use crate::harness::{Query, parse_response, send_request};
 use anyhow::ensure;
-use futures::stream::FuturesUnordered;
 use futures::StreamExt;
-use crate::harness::{parse_response, send_request, Query};
+use futures::stream::FuturesUnordered;
+use std::collections::HashSet;
 
 mod harness;
 
@@ -37,7 +37,14 @@ async fn union_test() -> anyhow::Result<()> {
         .map(|_| {
             // This produces a query that has all data types represented. To see it, run the test with RUST_LOG=debug.
             async {
-                let response = send_request(query.to_string(), Some(schema.clone()), state.clone(), None, false).await?;
+                let response = send_request(
+                    query.to_string(),
+                    Some(schema.clone()),
+                    state.clone(),
+                    None,
+                    false,
+                )
+                .await?;
                 ensure!(200 == response.status());
                 parse_response(response).await
             }
@@ -56,7 +63,12 @@ async fn union_test() -> anyhow::Result<()> {
         let user = response.user.expect("missing user from response");
         let content = user.aliased.get("content").unwrap().as_array().unwrap();
 
-        let content_types: HashSet<&str> = content.iter().flat_map(|c| c.as_object()).flat_map(|e| e.get("__typename")).flat_map(|s| s.as_str()).collect();
+        let content_types: HashSet<&str> = content
+            .iter()
+            .flat_map(|c| c.as_object())
+            .flat_map(|e| e.get("__typename"))
+            .flat_map(|s| s.as_str())
+            .collect();
         assert!(!content_types.contains("Content"));
         seen_multiple_union_members_in_one_list |= content_types.len() > 1;
     }
