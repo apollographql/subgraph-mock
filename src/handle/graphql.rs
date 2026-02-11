@@ -493,7 +493,7 @@ impl<'a, 'doc, 'schema> ResponseBuilder<'a, 'doc, 'schema> {
         &mut self,
         selection_set: &SelectionSet,
     ) -> anyhow::Result<Map<ByteString, Value>> {
-        let grouped_fields = self.collect_fields(&selection_set)?;
+        let grouped_fields = self.collect_fields(selection_set)?;
         let mut result = Map::new();
 
         for (key, fields) in grouped_fields {
