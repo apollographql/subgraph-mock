@@ -3,6 +3,7 @@ use crate::{
     state::{Config, FederatedSchema, State},
 };
 use anyhow::anyhow;
+use apollo_compiler::schema::UnionType;
 use apollo_compiler::{
     ExecutableDocument, Name, Node, Schema,
     ast::OperationType,
@@ -166,7 +167,7 @@ fn parse_and_validate(
     ExecutableDocument::parse_and_validate(schema, &req.query, op_name)
 }
 
-#[tracing::instrument(skip(req))]
+#[tracing::instrument(skip(req, schema))]
 #[cached(key = "u64", convert = "{cache_hash}")]
 async fn into_response_bytes_and_status_code(
     cfg: &ResponseGenerationConfig,
@@ -174,7 +175,7 @@ async fn into_response_bytes_and_status_code(
     schema: &FederatedSchema,
     cache_hash: u64,
 ) -> (Bytes, StatusCode) {
-    debug!(%cache_hash, "handling graphql request");
+    debug!(%cache_hash, req.operation_name, "handling graphql request");
     trace!(variables=?req.variables, "request variables");
 
     let doc = match parse_and_validate(&req, schema, cache_hash) {
@@ -443,7 +444,7 @@ impl ScalarGenerator {
                 // Allow for some multibyte chars. May still need to realloc
                 let mut chars = Vec::with_capacity(len * 2);
                 for _ in 0..len {
-                    chars.push(rng.random::<char>());
+                    chars.push(rng.sample(rand::distr::Alphanumeric) as char);
                 }
 
                 Value::String(ByteString::from(chars.into_iter().collect::<String>()))
@@ -500,7 +501,18 @@ impl<'a, 'doc, 'schema> ResponseBuilder<'a, 'doc, 'schema> {
             let meta_field = fields[0];
 
             let val = if meta_field.name == "__typename" {
-                Value::String(ByteString::from(selection_set.ty.to_string()))
+                let selection_type = if let Some(union_schema_ty) = self
+                    .schema
+                    .types
+                    .get(&selection_set.ty)
+                    .and_then(|t| t.as_union())
+                {
+                    // pick a specific member of the union, rather than using the union name
+                    self.arbitrary_union_member(union_schema_ty)?.to_string()
+                } else {
+                    selection_set.ty.to_string()
+                };
+                Value::String(ByteString::from(selection_type))
             } else if meta_field.name == "_service" {
                 let mut service_obj = Map::new();
                 service_obj.insert("sdl".to_string(), Value::String(self.schema.sdl().into()));
@@ -560,6 +572,8 @@ impl<'a, 'doc, 'schema> ResponseBuilder<'a, 'doc, 'schema> {
                     }
                 }
                 Selection::InlineFragment(inline_fragment) => {
+                    // NB: ignore inline fragment type conditions; if we add extra fields, the router
+                    // can filter them out for us
                     for (key, mut fields) in self.collect_fields(&inline_fragment.selection_set)? {
                         collected_fields.entry(key).or_default().append(&mut fields);
                     }
@@ -593,6 +607,17 @@ impl<'a, 'doc, 'schema> ResponseBuilder<'a, 'doc, 'schema> {
 
             _ => unreachable!("A field with an empty selection set must be a scalar or enum type"),
         }
+    }
+
+    fn arbitrary_union_member(&mut self, union_type: &UnionType) -> anyhow::Result<Name> {
+        let num_values = union_type.members.len();
+        let index = self.rng.random_range(0..num_values);
+        Ok(union_type
+            .members
+            .get_index(index)
+            .ok_or(anyhow!("Missing value"))?
+            .name
+            .clone())
     }
 
     fn arbitrary_array_len(&mut self) -> anyhow::Result<usize> {
