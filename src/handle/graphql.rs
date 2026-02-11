@@ -493,18 +493,6 @@ impl<'a, 'doc, 'schema> ResponseBuilder<'a, 'doc, 'schema> {
         &mut self,
         selection_set: &SelectionSet,
     ) -> anyhow::Result<Map<ByteString, Value>> {
-        // TODO: would like a way around the clone but need it for now to be able to mutate
-        let mut selection_set = selection_set.clone();
-        if let Some(union_schema_ty) = self
-            .schema
-            .types
-            .get(&selection_set.ty)
-            .and_then(|t| t.as_union())
-        {
-            let arbitrary_type = self.arbitrary_union_member(union_schema_ty)?;
-            selection_set.ty = arbitrary_type;
-        }
-
         let grouped_fields = self.collect_fields(&selection_set)?;
         let mut result = Map::new();
 
@@ -513,7 +501,18 @@ impl<'a, 'doc, 'schema> ResponseBuilder<'a, 'doc, 'schema> {
             let meta_field = fields[0];
 
             let val = if meta_field.name == "__typename" {
-                Value::String(ByteString::from(selection_set.ty.to_string()))
+                let selection_type = if let Some(union_schema_ty) = self
+                    .schema
+                    .types
+                    .get(&selection_set.ty)
+                    .and_then(|t| t.as_union())
+                {
+                    // pick a specific member of the union, rather than using the union name
+                    self.arbitrary_union_member(union_schema_ty)?.to_string()
+                } else {
+                    selection_set.ty.to_string()
+                };
+                Value::String(ByteString::from(selection_type))
             } else if meta_field.name == "_service" {
                 let mut service_obj = Map::new();
                 service_obj.insert("sdl".to_string(), Value::String(self.schema.sdl().into()));
