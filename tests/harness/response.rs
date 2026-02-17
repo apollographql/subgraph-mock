@@ -190,6 +190,7 @@ pub fn validate_response(
     }
 }
 
+// NB: cannot handle union types
 fn validate_selection_set(
     path: &str,
     selection_set: &SelectionSet,

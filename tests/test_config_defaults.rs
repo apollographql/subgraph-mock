@@ -9,7 +9,7 @@ mod harness;
 /// https://tokio.rs/tokio/topics/testing#pausing-and-resuming-time-in-tests
 #[tokio::test(start_paused = true)]
 async fn default_latency_and_port() -> anyhow::Result<()> {
-    let (port, state) = harness::initialize(None)?;
+    let (port, state) = harness::initialize(None, None)?;
     let rng_seed = 0;
     let subgraph_name = None;
     assert_eq!(port, 8080);
@@ -29,7 +29,7 @@ async fn default_latency_and_port() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn default_headers() -> anyhow::Result<()> {
-    let (_, state) = harness::initialize(None)?;
+    let (_, state) = harness::initialize(None, None)?;
     let response = make_request(42, state, None).await?;
     let headers = response.headers();
 
@@ -42,7 +42,7 @@ async fn default_headers() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn default_response_generation_caches() -> anyhow::Result<()> {
-    let (_, state) = harness::initialize(None)?;
+    let (_, state) = harness::initialize(None, None)?;
     let mut responses: Vec<Query> = Vec::with_capacity(10);
     for _ in 0..10 {
         let response = make_request(4449, state.clone(), None).await?;
@@ -62,7 +62,7 @@ async fn default_response_generation_caches() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn default_response_generation() -> anyhow::Result<()> {
-    let (_, state) = harness::initialize(Some("default_no_cache.yaml"))?;
+    let (_, state) = harness::initialize(Some("default_no_cache.yaml"), None)?;
     let mut responses: Vec<Query> = Vec::with_capacity(1000);
     let mut requests: FuturesUnordered<_> = (0..1000)
         .map(|_| {
