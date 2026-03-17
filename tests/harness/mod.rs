@@ -7,7 +7,7 @@ use arbitrary::Unstructured;
 use cached::proc_macro::cached;
 use http_body_util::{BodyExt, Full};
 use hyper::{Request, Response as HyperResponse, body::Bytes};
-use rand::{RngCore, SeedableRng, rngs::StdRng};
+use rand::{Rng, SeedableRng, rngs::StdRng};
 use serde_json_bytes::{Value, serde_json};
 use std::{borrow::Borrow, path::PathBuf, sync::Arc};
 use subgraph_mock::{
