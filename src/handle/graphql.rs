@@ -20,7 +20,7 @@ use hyper::{
     header::{HeaderName, HeaderValue},
 };
 use ordered_float::OrderedFloat;
-use rand::{Rng, rngs::ThreadRng, seq::IteratorRandom};
+use rand::{RngExt, rngs::ThreadRng, seq::IteratorRandom};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json_bytes::{
     ByteString, Map, Value, json,
@@ -280,7 +280,7 @@ fn generate_response(
         && rng.random_ratio(numerator, denominator)
     {
         let drop_count = rng.random_range(1..=data.len());
-        let sampled_keys = data.keys().cloned().choose_multiple(&mut rng, drop_count);
+        let sampled_keys = data.keys().cloned().sample(&mut rng, drop_count);
         let to_drop: HashSet<ByteString> = HashSet::from_iter(sampled_keys);
 
         data.retain(|key, _| !to_drop.contains(key));
