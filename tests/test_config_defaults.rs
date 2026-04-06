@@ -66,9 +66,11 @@ async fn default_response_generation() -> anyhow::Result<()> {
     let mut responses: Vec<Query> = Vec::with_capacity(1000);
     let mut requests: FuturesUnordered<_> = (0..1000)
         .map(|_| {
-            // This produces a query that has all data types represented. To see it, run the test with RUST_LOG=debug.
+            // This produces a query requesting a single nullable user by ID (with id, name,
+            // is_active, and distance) plus a list of posts (with views). To see it, run the
+            // test with RUST_LOG=debug.
             async {
-                let response = make_request(7, state.clone(), None).await?;
+                let response = make_request(54167, state.clone(), None).await?;
                 ensure!(200 == response.status());
                 parse_response(response).await
             }
@@ -78,13 +80,6 @@ async fn default_response_generation() -> anyhow::Result<()> {
     while let Some(response) = requests.next().await {
         responses.push(response?);
     }
-
-    // This field is a top-level alias in the query that requests a single user by ID (and is hence nullable)
-    let user_alias = "nwHYPt6HYPXJ1";
-
-    // user.name and user.is_active are both present in the query, but aliased under these names
-    let user_name_alias = "mH3ACoBr2";
-    let user_is_active_alias = "wVHIP0WIkF3xJVkyxw3";
 
     // the default array length is 0-10
     for response in &responses {
@@ -96,31 +91,18 @@ async fn default_response_generation() -> anyhow::Result<()> {
         );
     }
 
-    let (users, posts): (Vec<User>, Vec<Post>) = {
-        let (users, posts): (Vec<_>, Vec<_>) = responses
-            .into_iter()
-            .map(|mut response| {
-                (
-                    // remove aliased values so that we get ownership of the Value underlying them for deserialization
-                    response
-                        .aliased
-                        .remove(user_alias)
-                        .and_then(|user| serde_json_bytes::from_value(user).ok()),
-                    response.post,
-                )
-            })
-            .collect();
+    let (users, posts): (Vec<Option<User>>, Vec<Option<Vec<Post>>>) = responses
+        .into_iter()
+        .map(|response| (response.user, response.posts))
+        .unzip();
 
-        (
-            users.into_iter().flatten().collect(),
-            posts.into_iter().flatten().collect(),
-        )
-    };
+    let users: Vec<User> = users.into_iter().flatten().collect();
+    let posts: Vec<Post> = posts.into_iter().flatten().flatten().collect();
 
     let user_count = users.len();
 
-    // the default null ratio is 50% null
-    assert_eq!("0.5", format!("{:.1}", user_count as f32 / 1000.0));
+    // the default null_ratio is 1/2, outcome seeded for determinism by the harness
+    assert_eq!(478, user_count);
 
     for user in &users {
         // the default float range is -1.0 to 1.0
@@ -130,9 +112,8 @@ async fn default_response_generation() -> anyhow::Result<()> {
         );
         // the default string length is 1-10
         assert!(
-            user.aliased
-                .get(user_name_alias)
-                .and_then(|name| name.as_str())
+            user.name
+                .as_deref()
                 .is_some_and(|name| (1..=10).contains(&name.chars().count()))
         );
         // the default ID range is 0-100
@@ -141,19 +122,11 @@ async fn default_response_generation() -> anyhow::Result<()> {
 
     let true_count = users
         .iter()
-        .filter(|user| {
-            user.aliased
-                .get(user_is_active_alias)
-                .and_then(|is_active| is_active.as_bool())
-                .expect("is_active should be a bool")
-        })
+        .filter(|user| user.is_active.expect("is_active should be present"))
         .count();
 
-    // booleans are configured to always be 50% true.
-    assert_eq!(
-        "0.5",
-        format!("{:.1}", true_count as f32 / user_count as f32)
-    );
+    // The default boolean generator is 50% true; the seeded run's exact count.
+    assert_eq!(240, true_count);
 
     for post in posts {
         // the default Int range is 0-100

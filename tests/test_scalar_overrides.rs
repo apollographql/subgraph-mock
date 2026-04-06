@@ -9,38 +9,21 @@ async fn custom_scalars() -> anyhow::Result<()> {
 
     let mut responses: Vec<Query> = Vec::with_capacity(100);
     for _ in 0..100 {
-        // This produces a query that has all data types represented. To see it, run the test with RUST_LOG=debug.
-        let response = make_request(7, state.clone(), None).await?;
+        // This produces a query requesting a single nullable user by ID (with id, name,
+        // is_active, and distance) plus a list of posts (with views). To see it, run the test
+        // with RUST_LOG=debug.
+        let response = make_request(54167, state.clone(), None).await?;
         assert_eq!(200, response.status());
         responses.push(parse_response(response).await?);
     }
 
-    // This field is a top-level alias in the query that requests a single user by ID (and is hence nullable)
-    let user_alias = "nwHYPt6HYPXJ1";
+    let (users, posts): (Vec<Option<User>>, Vec<Option<Vec<Post>>>) = responses
+        .into_iter()
+        .map(|response| (response.user, response.posts))
+        .unzip();
 
-    // user.name is present in the query, but aliased under this name
-    let user_name_alias = "mH3ACoBr2";
-
-    let (users, posts): (Vec<User>, Vec<Post>) = {
-        let (users, posts): (Vec<_>, Vec<_>) = responses
-            .into_iter()
-            .map(|mut response| {
-                (
-                    // remove aliased values so that we get ownership of the Value underlying them for deserialization
-                    response
-                        .aliased
-                        .remove(user_alias)
-                        .and_then(|user| serde_json_bytes::from_value(user).ok()),
-                    response.post,
-                )
-            })
-            .collect();
-
-        (
-            users.into_iter().flatten().collect(),
-            posts.into_iter().flatten().collect(),
-        )
-    };
+    let users: Vec<User> = users.into_iter().flatten().collect();
+    let posts: Vec<Post> = posts.into_iter().flatten().flatten().collect();
 
     for user in &users {
         assert!(
@@ -48,9 +31,8 @@ async fn custom_scalars() -> anyhow::Result<()> {
                 .is_some_and(|distance| (-5.0..=5.0).contains(&distance))
         );
         assert!(
-            user.aliased
-                .get(user_name_alias)
-                .and_then(|name| name.as_str())
+            user.name
+                .as_deref()
                 .is_some_and(|name| (10..=20).contains(&name.chars().count()))
         );
         assert!(user.id.is_some_and(|id| (100..=200).contains(&id)));

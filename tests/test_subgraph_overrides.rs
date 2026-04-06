@@ -6,8 +6,8 @@ mod harness;
 async fn subgraph_overrides() -> anyhow::Result<()> {
     let (_, state) = harness::initialize(Some("subgraph_override.yaml"), None)?;
 
-    let standard_response = make_request(18, state.clone(), None).await?;
-    let subgraph_response = make_request(18, state, Some("special_subgraph".to_owned())).await?;
+    let standard_response = make_request(54167, state.clone(), None).await?;
+    let subgraph_response = make_request(54167, state, Some("special_subgraph".to_owned())).await?;
 
     assert_eq!(
         standard_response
