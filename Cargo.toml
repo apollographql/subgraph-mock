@@ -11,7 +11,7 @@ license = "MIT"
 name = "subgraph-mock"
 readme = "README.md"
 repository = "https://github.com/apollographql/subgraph-mock"
-version = "0.1.1"
+version = "0.2.0"
 
 [workspace.dependencies]
 tokio = { version = "1.47.1", features = ["macros", "net", "parking_lot", "rt-multi-thread"] }
