@@ -19,10 +19,8 @@ tokio = { version = "1.47.1", features = ["macros", "net", "parking_lot", "rt-mu
 [dependencies]
 anyhow = "1.0.99"
 apollo-compiler = "1.30.0"
-arbitrary = "1.4.2"
 cached = { version = "0.59.0", features = ["async", "async_tokio_rt_multi_thread"] }
 clap = { version = "4.5.47", features = ["derive"] }
-futures = "0.3.31"
 http-body-util = "0.1.3"
 humantime-serde = "1.1.1"
 hyper = { version = "1.8.1", features = ["server"] }
@@ -40,6 +38,7 @@ tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }
 [dev-dependencies]
 apollo-smith = "0.15.2"
 apollo-parser = "0.8.4"
-ctor = "0.9.0"
+arbitrary = "1.4.2"
+futures = "0.3.31"
 pretty_assertions = "1.4"
 tokio = { workspace = true , features = ["test-util"] }
