@@ -11,18 +11,16 @@ env:
 
 jobs:
   publish-subgraph-mock-image:
-    runs-on: ubuntu-latest
+    uses: apollographql/release-tooling/.github/workflows/build_and_publish.yml@cc8018036a3df0bfb7dd8b5d92ff23c998a59579
     permissions:
       contents: read
       packages: write
       attestations: write
       id-token: write
-
-    steps:
-      - uses: apollographql/release-tooling/build-and-publish@c3f1e8e459a22e5dbd9ac6112f2125995bd890d8
-        with:
-          context: ${{ github.workspace }}
-          dockerfile_location: ${{ github.workspace }}/Dockerfile
-          image_description: 'An image that allows us to mock subgraphs for testing purposes'
-          image_name: 'subgraph-mock'
-          platforms: 'linux/amd64,linux/arm64,macOS/arm64'
+    with:
+      context: ${{ github.workspace }}
+      dockerfile_location: ${{ github.workspace }}/Dockerfile
+      image_description: 'An image that allows us to mock subgraphs for testing purposes'
+      image_name: 'subgraph-mock'
+      platforms: 'linux/amd64,linux/arm64,macOS/arm64'
+    secrets: inherit
