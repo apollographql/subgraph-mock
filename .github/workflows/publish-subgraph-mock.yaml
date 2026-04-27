@@ -22,5 +22,5 @@ jobs:
       dockerfile_location: ${{ github.workspace }}/Dockerfile
       image_description: 'An image that allows us to mock subgraphs for testing purposes'
       image_name: 'subgraph-mock'
-      platforms: '[{"platform":"linux/amd64","runner":"ubuntu-24.04"},{"platform":"linux/arm64","runner":"ubuntu-24.04-arm"},{"platform":"macOS/arm64","runner":"macos-26"}]'
+      platforms: '[{"platform":"linux/amd64","runner":"ubuntu-24.04"},{"platform":"linux/arm64","runner":"ubuntu-24.04-arm"}]'
     secrets: inherit
