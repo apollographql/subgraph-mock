@@ -18,8 +18,8 @@ jobs:
       attestations: write
       id-token: write
     with:
-      context: ${{ github.workspace }}
-      dockerfile_location: ${{ github.workspace }}/Dockerfile
+      context: "."
+      dockerfile_location: "./Dockerfile"
       image_description: 'An image that allows us to mock subgraphs for testing purposes'
       image_name: 'subgraph-mock'
       platforms: '[{"platform":"linux/amd64","runner":"ubuntu-24.04"},{"platform":"linux/arm64","runner":"ubuntu-24.04-arm"}]'
