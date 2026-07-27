@@ -10,6 +10,26 @@ const FTV1_HEADER: (&str, &str) = ("apollo-federation-include-trace", "ftv1");
 
 const QUERY: &str = r#"query { user(id: "1") { __typename name email address { city } } }"#;
 
+/// Exercises the traversal branches the plain `QUERY` does not: an alias, a fragment spread, an
+/// inline fragment, and a field (`address`) selected from two places that must merge into one node.
+const FRAGMENT_QUERY: &str = r#"
+query {
+  user(id: "1") {
+    __typename
+    displayName: name
+    ...UserContact
+    ... on User {
+      distance
+      address { state }
+    }
+  }
+}
+fragment UserContact on User {
+  email
+  address { city }
+}
+"#;
+
 /// Collects a response body into its parsed JSON value.
 async fn response_json(response: ByteResponse) -> anyhow::Result<Value> {
     let bytes = response.into_body().collect().await?.to_bytes();
@@ -148,6 +168,87 @@ async fn subgraph_override_disables_trace_despite_header() -> anyhow::Result<()>
     assert!(
         body.get("extensions").is_none(),
         "subgraph override `ftv1: false` should suppress the trace even with the header"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn aliases_and_fragments_are_traced() -> anyhow::Result<()> {
+    let (_, state) = initialize(None, None)?;
+
+    let response = send_request_with_headers(
+        FRAGMENT_QUERY.to_owned(),
+        None,
+        state,
+        None,
+        true,
+        &[FTV1_HEADER],
+    )
+    .await?;
+    let body = response_json(response).await?;
+
+    let encoded = body
+        .get("extensions")
+        .and_then(|extensions| extensions.get("ftv1"))
+        .and_then(Value::as_str)
+        .expect("response should carry extensions.ftv1");
+
+    let trace = ftv1::decode(encoded)?;
+    let root = trace.root.as_ref().expect("trace should have a root node");
+    let user = child(root, "user");
+
+    // `__typename` is skipped; the alias, the fragment-spread fields, and the inline-fragment field
+    // remain, with `address` merged into a single node despite being selected from two places.
+    assert_eq!(user.child.len(), 4);
+
+    // Aliased field: the response name is the alias, but the type is still `name`'s type.
+    let display_name = child(user, "displayName");
+    assert_eq!(display_name.parent_type, "User");
+    assert_eq!(display_name.r#type, "String!");
+
+    // Pulled in through the fragment spread.
+    child(user, "email");
+
+    // Pulled in through the inline fragment.
+    let distance = child(user, "distance");
+    assert_eq!(distance.r#type, "Float!");
+
+    // Selected in both the fragment (`city`) and the inline fragment (`state`): the two selections
+    // merge under one `address` node rather than producing duplicate nodes.
+    let address = child(user, "address");
+    assert_eq!(address.child.len(), 2);
+    child(address, "city");
+    child(address, "state");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn validation_error_omits_trace() -> anyhow::Result<()> {
+    let (_, state) = initialize(None, None)?;
+
+    // `not_a_field` does not exist on `User`, so the request fails validation and returns 400.
+    let response = send_request_with_headers(
+        r#"query { user(id: "1") { not_a_field } }"#.to_owned(),
+        None,
+        state,
+        None,
+        false,
+        &[FTV1_HEADER],
+    )
+    .await?;
+
+    assert_eq!(
+        response.status().as_u16(),
+        400,
+        "an invalid query should return 400"
+    );
+
+    let body = response_json(response).await?;
+    assert!(
+        body.get("extensions").is_none(),
+        "a validation-error response should not carry a trace even with the ftv1 header"
     );
 
     Ok(())
