@@ -8,7 +8,8 @@
 //! This module hand-rolls the wire-compatible subset of Apollo's `reports.proto` `Trace` message
 //! that the router needs, so the crate can emit realistic traces without a protobuf toolchain
 //! (`prost` handles encoding via `#[derive(prost::Message)]`; there is no `.proto` file or
-//! `build.rs`).
+//! `build.rs`). Only [`Trace`] and [`Node`] are Apollo-proprietary; timestamps reuse the standard
+//! [`prost_types::Timestamp`] well-known type.
 //!
 //! ## List-node simplification
 //!
@@ -23,7 +24,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use prost::Message as _;
 use std::collections::HashMap;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime};
 
 /// Synthetic per-node processing cost used to advance the trace clock so timing offsets nest and
 /// stay ordered.
@@ -34,10 +35,10 @@ const PER_NODE_COST_NS: u64 = 1_000;
 pub struct Trace {
     /// Wall-clock time at which the operation started executing.
     #[prost(message, optional, tag = "4")]
-    pub start_time: Option<Timestamp>,
+    pub start_time: Option<prost_types::Timestamp>,
     /// Wall-clock time at which the operation finished executing.
     #[prost(message, optional, tag = "3")]
-    pub end_time: Option<Timestamp>,
+    pub end_time: Option<prost_types::Timestamp>,
     /// Total operation duration in nanoseconds.
     #[prost(uint64, tag = "11")]
     pub duration_ns: u64,
@@ -73,26 +74,13 @@ pub struct Node {
     pub child: Vec<Node>,
 }
 
-/// Wire-identical to `google.protobuf.Timestamp`.
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Timestamp {
-    /// Seconds since the Unix epoch.
-    #[prost(int64, tag = "1")]
-    pub seconds: i64,
-    /// Nanosecond offset within the second.
-    #[prost(int32, tag = "2")]
-    pub nanos: i32,
-}
-
 /// Builds a [`Trace`] whose node tree mirrors the operation's selection set.
 ///
 /// Timing is synthetic: a running nanosecond clock assigns each node a `start_time`, recurses into
 /// its children (advancing the clock), then adds a fixed per-node cost before recording `end_time`,
 /// so child spans nest within their parent and siblings stay ordered.
 pub fn build_trace(op: &Operation, doc: &ExecutableDocument) -> Trace {
-    let since_epoch = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
+    let start = SystemTime::now();
 
     let mut builder = TraceBuilder { doc, clock: 0 };
     let child = builder.nodes(&op.selection_set);
@@ -108,10 +96,8 @@ pub fn build_trace(op: &Operation, doc: &ExecutableDocument) -> Trace {
     };
 
     Trace {
-        start_time: Some(timestamp_from(since_epoch)),
-        end_time: Some(timestamp_from(
-            since_epoch + Duration::from_nanos(duration_ns),
-        )),
+        start_time: Some(start.into()),
+        end_time: Some((start + Duration::from_nanos(duration_ns)).into()),
         duration_ns,
         root: Some(root),
     }
@@ -131,13 +117,6 @@ pub fn encode(trace: &Trace) -> String {
 pub fn decode(encoded: &str) -> anyhow::Result<Trace> {
     let bytes = STANDARD.decode(encoded)?;
     Trace::decode(bytes.as_slice()).map_err(Into::into)
-}
-
-fn timestamp_from(duration: Duration) -> Timestamp {
-    Timestamp {
-        seconds: duration.as_secs() as i64,
-        nanos: duration.subsec_nanos() as i32,
-    }
 }
 
 struct TraceBuilder<'a> {
