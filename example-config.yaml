@@ -32,6 +32,13 @@ latency:
 # will be used. Additional scalar generators can be defined and the existing
 # defaults can be overwritten as needed.
 response_generation:
+  # Whether to emit an FTV1 (Federated Tracing v1) trace in `extensions.ftv1`.
+  # By default (when omitted), a trace is emitted only when the router sends the
+  # `apollo-federation-include-trace: ftv1` request header, matching real subgraph
+  # behavior. Set this to force the behavior regardless of the header:
+  #   true  -> always emit a trace, even without the header
+  #   false -> never emit a trace, even when the header is present
+  ftv1: true
   # How frequently to set nullable fields to null
   null_ratio: [1, 2]
   # How frequently to include a particular header

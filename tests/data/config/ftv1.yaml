@@ -1,0 +1,7 @@
+response_generation:
+  ftv1: true
+
+subgraph_overrides:
+  no_trace:
+    response_generation:
+      ftv1: false

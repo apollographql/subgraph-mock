@@ -1,4 +1,5 @@
 use crate::{
+    ftv1,
     handle::ByteResponse,
     state::{Config, FederatedSchema, State},
 };
@@ -40,6 +41,7 @@ pub async fn handle(
     body_bytes: Vec<u8>,
     subgraph_name: Option<&str>,
     state: Arc<State>,
+    include_ftv1: bool,
 ) -> anyhow::Result<ByteResponse> {
     let req: GraphQLRequest = match serde_json::from_slice(&body_bytes) {
         Ok(req) => req,
@@ -72,6 +74,16 @@ pub async fn handle(
     schema.hash(&mut hasher);
     let cache_hash = hasher.finish();
 
+    // `None` follows the request header; `Some(_)` overrides it per-subgraph.
+    let should_emit_ftv1 = rgen_cfg.ftv1.unwrap_or(include_ftv1);
+    // The cached bytes are time-independent, but traces are per-request, so capture just enough of
+    // the request to rebuild the trace after the (potentially cached) response bytes are returned.
+    let ftv1_req = should_emit_ftv1.then(|| GraphQLRequest {
+        query: req.query.clone(),
+        operation_name: req.operation_name.clone(),
+        variables: JsonMap::new(),
+    });
+
     if let Some((numerator, denominator)) = rgen_cfg.http_error_ratio {
         let mut rng = rand::rng();
         if rng.random_ratio(numerator, denominator) {
@@ -89,6 +101,16 @@ pub async fn handle(
         into_response_bytes_and_status_code(rgen_cfg, req, &schema, cache_hash).await
     } else {
         into_response_bytes_and_status_code_no_cache(rgen_cfg, req, &schema, cache_hash).await
+    };
+
+    // FTV1 traces are spliced here, off the cached hot path, so cached bytes stay byte-for-byte
+    // identical. Only 200 responses carry a trace; validation-error (400) and 5xx bodies are left
+    // untouched.
+    let bytes = match ftv1_req {
+        Some(ftv1_req) if status_code == StatusCode::OK => {
+            splice_ftv1_trace(bytes, &ftv1_req, &schema, cache_hash)
+        }
+        _ => bytes,
     };
 
     let mut resp = Response::new(Full::new(bytes).map_err(|never| match never {}).boxed());
@@ -154,6 +176,53 @@ fn add_headers(
     }
 
     headers.insert("Content-Type", HeaderValue::from_static("application/json"));
+}
+
+/// Rebuilds the operation's trace and splices it into the response's `extensions.ftv1` field.
+///
+/// The document is retrieved via the (already-populated) `parse_and_validate` cache, so this only
+/// pays for building, encoding, and re-serializing the trace. On any failure the original bytes are
+/// returned unchanged so a trace can never take down an otherwise-valid response.
+fn splice_ftv1_trace(
+    bytes: Bytes,
+    req: &GraphQLRequest,
+    schema: &FederatedSchema,
+    cache_hash: u64,
+) -> Bytes {
+    let Ok(doc) = parse_and_validate(req, schema, cache_hash) else {
+        return bytes;
+    };
+    let Some(op) = doc.operations.iter().next() else {
+        return bytes;
+    };
+
+    let encoded = ftv1::encode(&ftv1::build_trace(op, &doc));
+
+    let mut value: Value = match serde_json::from_slice(bytes.as_ref()) {
+        Ok(value) => value,
+        Err(err) => {
+            error!(%err, "unable to parse response for ftv1 splicing");
+            return bytes;
+        }
+    };
+
+    let Some(response) = value.as_object_mut() else {
+        return bytes;
+    };
+    let extensions = response
+        .entry("extensions")
+        .or_insert_with(|| Value::Object(Map::new()));
+    if let Some(extensions) = extensions.as_object_mut() {
+        extensions.insert("ftv1", Value::String(encoded.into()));
+    }
+
+    match serde_json::to_vec(&value) {
+        Ok(spliced) => spliced.into(),
+        Err(err) => {
+            error!(%err, "unable to re-serialize response with ftv1 trace");
+            bytes
+        }
+    }
 }
 
 #[cached(result = true, key = "u64", convert = "{_cache_hash}")]
@@ -338,6 +407,11 @@ pub struct ResponseGenerationConfig {
     pub http_error_ratio: Option<Ratio>,
     #[serde(default)]
     pub graphql_errors: GraphQLErrorConfig,
+    /// Controls FTV1 trace emission for this config. `None` (the default) follows the
+    /// `apollo-federation-include-trace: ftv1` request header; `Some(true)` always emits a trace
+    /// even without the header; `Some(false)` never emits one even when the header is present.
+    #[serde(default)]
+    pub ftv1: Option<bool>,
 }
 
 impl ResponseGenerationConfig {
@@ -359,6 +433,7 @@ impl Default for ResponseGenerationConfig {
             header_ratio: BTreeMap::new(),
             graphql_errors: GraphQLErrorConfig::default(),
             http_error_ratio: None,
+            ftv1: None,
         }
     }
 }

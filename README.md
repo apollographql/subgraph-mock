@@ -35,6 +35,23 @@ This mock server has partial Federation v2 support. It can understand and parse 
 that use the built-in Federation v2 directives. It does not currently do any actual resolution of
 the `@link` directive, so any imports or renames as specified in that directive will not work.
 
+#### Federated Tracing (FTV1)
+
+Real subgraphs return a per-field timing trace when the router requests one. This mock does the
+same: when a request carries the `apollo-federation-include-trace: ftv1` header, the response
+includes a base64-encoded protobuf `Trace` in its `extensions.ftv1` field. The router decodes these
+to report field-level metrics to GraphOS, so this lets trace-dependent router features be exercised
+end-to-end against the mock.
+
+The node tree mirrors the query's selection set, with each node carrying its `response_name`,
+`type`, and `parent_type` plus synthetic-but-plausible nested timing. One simplification: list
+fields emit their sub-selection children directly rather than per-element `index` nodes, so the tree
+stays aligned to the query but lacks per-element timing.
+
+Emission can be forced on or off regardless of the header via `response_generation.ftv1` (which is
+also subgraph-overridable): omit it to follow the header, set `true` to always emit, or `false` to
+never emit. See `example-config.yaml` for details.
+
 #### Subgraph Overrides
 
 If your test scenario calls for behavioral differences between subgraphs, the mock server will

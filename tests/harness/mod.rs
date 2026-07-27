@@ -143,6 +143,30 @@ pub async fn send_request<T>(
 where
     T: Borrow<Option<String>>,
 {
+    send_request_with_headers(
+        operation_def,
+        schema_name,
+        state,
+        subgraph_name,
+        validate,
+        &[],
+    )
+    .await
+}
+
+/// Like [send_request], but sets the provided `headers` (name/value pairs) on the request. Used to
+/// exercise header-driven behavior such as FTV1 trace emission.
+pub async fn send_request_with_headers<T>(
+    operation_def: String,
+    schema_name: Option<String>,
+    state: Arc<State>,
+    subgraph_name: T,
+    validate: bool,
+    headers: &[(&str, &str)],
+) -> anyhow::Result<ByteResponse>
+where
+    T: Borrow<Option<String>>,
+{
     let uri = match subgraph_name.borrow() {
         Some(name) => format!("/{name}"),
         None => "/".to_owned(),
@@ -154,10 +178,11 @@ where
         variables: JsonMap::new(),
     })?;
 
-    let req = Request::builder()
-        .method("POST")
-        .uri(uri)
-        .body(Full::<Bytes>::from(body))?;
+    let mut builder = Request::builder().method("POST").uri(uri);
+    for (name, value) in headers {
+        builder = builder.header(*name, *value);
+    }
+    let req = builder.body(Full::<Bytes>::from(body))?;
 
     // Rip the body out, validate it, then repackage it to return
     let (parts, body) = handle_request(req, state).await?.into_parts();
