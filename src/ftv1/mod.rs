@@ -18,12 +18,12 @@
 //! we skip the `index` layer: a list field emits its sub-selection children directly. The tree
 //! still decodes and stitches correctly; it simply lacks per-element timing granularity.
 
+use crate::selection;
 use apollo_compiler::ExecutableDocument;
-use apollo_compiler::executable::{Field, Operation, Selection, SelectionSet};
+use apollo_compiler::executable::{Field, Operation, SelectionSet};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use prost::Message as _;
-use std::collections::HashMap;
 use std::time::{Duration, SystemTime};
 
 /// Synthetic per-node processing cost used to advance the trace clock so timing offsets nest and
@@ -126,12 +126,10 @@ struct TraceBuilder<'a> {
 
 impl TraceBuilder<'_> {
     fn nodes(&mut self, selection_set: &SelectionSet) -> Vec<Node> {
-        let mut collected = Vec::new();
-        let mut index = HashMap::new();
-        collect_fields(self.doc, selection_set, &mut collected, &mut index);
+        let grouped = selection::collect_fields(self.doc, selection_set);
 
-        let mut nodes = Vec::with_capacity(collected.len());
-        for (response_name, fields) in collected {
+        let mut nodes = Vec::with_capacity(grouped.len());
+        for (response_name, fields) in grouped {
             let meta = fields[0];
             if meta.name == "__typename" {
                 continue;
@@ -142,14 +140,7 @@ impl TraceBuilder<'_> {
             let child = if meta.selection_set.selections.is_empty() {
                 Vec::new()
             } else {
-                let mut selections = Vec::new();
-                for field in &fields {
-                    selections.extend_from_slice(&field.selection_set.selections);
-                }
-                self.nodes(&SelectionSet {
-                    ty: meta.selection_set.ty.clone(),
-                    selections,
-                })
+                self.nodes(&merged_child_selections(&fields))
             };
 
             self.clock += PER_NODE_COST_NS;
@@ -168,35 +159,16 @@ impl TraceBuilder<'_> {
     }
 }
 
-/// Flattens a selection set into ordered `(response_name, fields)` groups, following fragment
-/// spreads and inline fragments. Mirrors the traversal in `ResponseBuilder::collect_fields` but
-/// preserves query order so trace timing is deterministic.
-fn collect_fields<'a>(
-    doc: &'a ExecutableDocument,
-    selection_set: &'a SelectionSet,
-    out: &mut Vec<(String, Vec<&'a Field>)>,
-    index: &mut HashMap<String, usize>,
-) {
-    for selection in &selection_set.selections {
-        match selection {
-            Selection::Field(field) => {
-                let key = field.alias.as_ref().unwrap_or(&field.name).to_string();
-                match index.get(&key) {
-                    Some(&i) => out[i].1.push(&**field),
-                    None => {
-                        index.insert(key.clone(), out.len());
-                        out.push((key, vec![&**field]));
-                    }
-                }
-            }
-            Selection::FragmentSpread(fragment) => {
-                if let Some(definition) = doc.fragments.get(&fragment.fragment_name) {
-                    collect_fields(doc, &definition.selection_set, out, index);
-                }
-            }
-            Selection::InlineFragment(inline_fragment) => {
-                collect_fields(doc, &inline_fragment.selection_set, out, index);
-            }
-        }
+/// Combines the sub-selections of every field sharing a response key into one selection set, so a
+/// field selected from several places (e.g. across fragments) is traced as a single node whose
+/// children are the union of those selections.
+fn merged_child_selections(fields: &[&apollo_compiler::Node<Field>]) -> SelectionSet {
+    let mut selections = Vec::new();
+    for field in fields {
+        selections.extend_from_slice(&field.selection_set.selections);
+    }
+    SelectionSet {
+        ty: fields[0].selection_set.ty.clone(),
+        selections,
     }
 }

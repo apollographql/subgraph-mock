@@ -12,6 +12,7 @@ use tracing::{error, info};
 pub mod ftv1;
 pub mod handle;
 pub mod latency;
+pub(crate) mod selection;
 pub mod state;
 
 /// A general purpose subgraph mock.

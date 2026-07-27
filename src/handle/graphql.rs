@@ -1,6 +1,7 @@
 use crate::{
     ftv1,
     handle::ByteResponse,
+    selection,
     state::{Config, FederatedSchema, State},
 };
 use anyhow::anyhow;
@@ -8,7 +9,7 @@ use apollo_compiler::schema::UnionType;
 use apollo_compiler::{
     ExecutableDocument, Name, Node, Schema,
     ast::OperationType,
-    executable::{Field, Selection, SelectionSet},
+    executable::{Field, SelectionSet},
     request::coerce_variable_values,
     response::JsonMap,
     schema::ExtendedType,
@@ -192,7 +193,7 @@ fn splice_ftv1_trace(
     let Ok(doc) = parse_and_validate(req, schema, cache_hash) else {
         return bytes;
     };
-    let Some(op) = doc.operations.iter().next() else {
+    let Some(op) = selection::primary_operation(&doc) else {
         return bytes;
     };
 
@@ -258,7 +259,7 @@ async fn into_response_bytes_and_status_code(
         }
     };
 
-    let op = doc.operations.iter().next().unwrap();
+    let op = selection::primary_operation(&doc).unwrap();
     let op_name = op.name.as_ref().map(|name| name.as_str());
 
     debug!(
@@ -568,7 +569,7 @@ impl<'a, 'doc, 'schema> ResponseBuilder<'a, 'doc, 'schema> {
         &mut self,
         selection_set: &SelectionSet,
     ) -> anyhow::Result<Map<ByteString, Value>> {
-        let grouped_fields = self.collect_fields(selection_set)?;
+        let grouped_fields = self.collect_fields(selection_set);
         let mut result = Map::new();
 
         for (key, fields) in grouped_fields {
@@ -630,33 +631,10 @@ impl<'a, 'doc, 'schema> ResponseBuilder<'a, 'doc, 'schema> {
     fn collect_fields(
         &self,
         selection_set: &'doc SelectionSet,
-    ) -> anyhow::Result<HashMap<String, Vec<&'doc Node<Field>>>> {
-        let mut collected_fields: HashMap<String, Vec<&Node<Field>>> = HashMap::new();
-
-        for selection in &selection_set.selections {
-            match selection {
-                Selection::Field(field) => {
-                    let key = field.alias.as_ref().unwrap_or(&field.name).to_string();
-                    collected_fields.entry(key).or_default().push(field);
-                }
-                Selection::FragmentSpread(fragment) => {
-                    if let Some(fragment_def) = self.doc.fragments.get(&fragment.fragment_name) {
-                        for (key, mut fields) in self.collect_fields(&fragment_def.selection_set)? {
-                            collected_fields.entry(key).or_default().append(&mut fields);
-                        }
-                    }
-                }
-                Selection::InlineFragment(inline_fragment) => {
-                    // NB: ignore inline fragment type conditions; if we add extra fields, the router
-                    // can filter them out for us
-                    for (key, mut fields) in self.collect_fields(&inline_fragment.selection_set)? {
-                        collected_fields.entry(key).or_default().append(&mut fields);
-                    }
-                }
-            }
-        }
-
-        Ok(collected_fields)
+    ) -> HashMap<String, Vec<&'doc Node<Field>>> {
+        selection::collect_fields(self.doc, selection_set)
+            .into_iter()
+            .collect()
     }
 
     fn leaf_field(&mut self, type_name: &Name) -> anyhow::Result<Value> {
