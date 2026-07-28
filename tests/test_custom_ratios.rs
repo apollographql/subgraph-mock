@@ -14,7 +14,7 @@ async fn custom_ratios() -> anyhow::Result<()> {
     let mut responses = Vec::with_capacity(1000);
     let mut requests: FuturesUnordered<_> = (0..1000)
         .map(|_| async {
-            let response = make_request(1122833, state.clone(), None).await?;
+            let response = make_request(54167, state.clone(), None).await?;
             ensure!(200 == response.status());
             Ok(response)
         })
@@ -39,8 +39,10 @@ async fn custom_ratios() -> anyhow::Result<()> {
         .count()
         .await;
 
-    assert_eq!("0.5", format!("{:.1}", header_count as f64 / 1000.0));
-    assert_eq!("0.8", format!("{:.1}", non_null_count as f64 / 1000.0));
+    // the default header is 1/2, outcome seeded for determinism by the harness
+    assert_eq!(539, header_count);
+    // the default null ratio is 1/5, outcome seeded for determinism by the harness
+    assert_eq!(815, non_null_count);
 
     Ok(())
 }

@@ -13,8 +13,12 @@ use std::{borrow::Borrow, path::PathBuf, sync::Arc};
 use subgraph_mock::{
     Args,
     handle::{ByteResponse, graphql::GraphQLRequest, handle_request},
-    state::State,
+    state::{RngSource, State},
 };
+
+/// Fixed seed used by every test that initializes through this harness.
+/// Pinning this makes stochastic ratio assertions deterministic across runs.
+const TEST_RNG_SEED: u64 = 0xC0FFEE;
 use tokio::time::{self, Duration, Instant};
 use tracing::debug;
 use tracing_subscriber::{
@@ -61,7 +65,12 @@ pub fn initialize(
             .map(|name| PathBuf::from(format!("{pkg_root}/tests/data/config/{name}"))),
         schema: schema_pathbuf(schema_file_name),
     };
-    args.init().map(|(port, state)| (port, Arc::new(state)))
+    let (port, state) = args.init()?;
+
+    Ok((
+        port,
+        Arc::new(state.with_rng(RngSource::seeded(TEST_RNG_SEED))),
+    ))
 }
 
 /// Cached supergraph document that is used as the basis for generating requests

@@ -4,10 +4,12 @@ use tokio::sync::RwLock;
 use tracing::error;
 
 mod config;
+mod rng;
 mod schema;
 
 pub use config::Config;
 pub use config::default_port;
+pub use rng::RngSource;
 pub use schema::FederatedSchema;
 
 use schema::update_schema;
@@ -15,6 +17,7 @@ use schema::update_schema;
 pub struct State {
     pub config: Arc<RwLock<Config>>,
     pub schema: Arc<RwLock<FederatedSchema>>,
+    pub rng: RngSource,
     /// Handle to the pollwatcher that updates the schema for this config, so that it only drops out of scope when this state does
     _schema_watcher: PollWatcher,
 }
@@ -50,11 +53,17 @@ impl State {
         Ok(Self {
             config: Arc::new(RwLock::new(config)),
             schema,
+            rng: RngSource::default(),
             _schema_watcher: schema_watcher,
         })
     }
 
     pub fn default(schema_path: PathBuf) -> anyhow::Result<Self> {
         Self::new(Config::default(), schema_path)
+    }
+
+    pub fn with_rng(mut self, rng: RngSource) -> Self {
+        self.rng = rng;
+        self
     }
 }
