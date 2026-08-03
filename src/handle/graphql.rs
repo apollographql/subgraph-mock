@@ -93,7 +93,7 @@ pub async fn handle(
         .unwrap_or_else(|| config.cache_responses);
 
     let (bytes, status_code) = if cache_enabled {
-        into_response_bytes_and_status_code(rgen_cfg, req, &schema, cache_hash).await
+        into_response_bytes_and_status_code(rgen_cfg, req, &schema, cache_hash, &mut rng).await
     } else {
         generate_body(rgen_cfg, req, &schema, cache_hash, &mut rng).await
     };
@@ -173,16 +173,16 @@ fn parse_and_validate(
     ExecutableDocument::parse_and_validate(schema, &req.query, op_name)
 }
 
-#[tracing::instrument(skip(req, schema))]
+#[tracing::instrument(skip(req, schema, rng))]
 #[cached(key = "u64", convert = "{cache_hash}")]
 async fn into_response_bytes_and_status_code(
     cfg: &ResponseGenerationConfig,
     req: GraphQLRequest,
     schema: &FederatedSchema,
     cache_hash: u64,
+    rng: &mut StdRng,
 ) -> (Bytes, StatusCode) {
-    let mut rng = StdRng::from_rng(&mut rand::rng());
-    generate_body(cfg, req, schema, cache_hash, &mut rng).await
+    generate_body(cfg, req, schema, cache_hash, rng).await
 }
 
 #[tracing::instrument(skip(req, schema, rng))]
