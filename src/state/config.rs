@@ -21,6 +21,11 @@ const SUBGRAPH_OVERRIDES_KEY: &str = "subgraph_overrides";
 struct BaseConfig {
     #[serde(default = "default_port")]
     pub port: u16,
+    /// Seed for the server's random number generator. Omit for non-reproducible
+    /// (OS-sourced) randomness. Global only: setting this in a subgraph override
+    /// has no effect, since all subgraphs share a single RNG.
+    #[serde(default)]
+    pub seed: Option<u64>,
     #[serde(default)]
     pub headers: HashMap<String, String>,
     #[serde(default)]
@@ -43,6 +48,7 @@ impl Default for BaseConfig {
     fn default() -> Self {
         Self {
             port: default_port(),
+            seed: Default::default(),
             headers: Default::default(),
             latency: Default::default(),
             response_generation: Default::default(),
@@ -116,8 +122,8 @@ impl Default for Config {
 }
 
 impl Config {
-    /// Parses a YAML file into a resolved port and [Config]
-    pub fn parse_yaml(mut base: Value) -> anyhow::Result<(u16, Config)> {
+    /// Parses a YAML file into a resolved port, RNG seed, and [Config]
+    pub fn parse_yaml(mut base: Value) -> anyhow::Result<(u16, Option<u64>, Config)> {
         let mapping = base
             .as_mapping_mut()
             .ok_or_else(|| Error::msg("config file must be a mapping"))?;
@@ -139,6 +145,10 @@ impl Config {
 
                         if override_mapping.contains_key("port") {
                             warn!("port overrides for subgraphs will be ignored")
+                        }
+
+                        if override_mapping.contains_key("seed") {
+                            warn!("seed overrides for subgraphs will be ignored")
                         }
 
                         merge_yaml(subgraph_override, &mut subgraph_config);
@@ -166,11 +176,16 @@ impl Config {
             }
         }
 
+        let base_config = serde_yaml::from_value::<BaseConfig>(base)?;
+        let seed = base_config.seed;
+        info!(seed = ?seed, "rng seed");
+
         let (port, cache_responses, latency, headers, response_generation) =
-            serde_yaml::from_value::<BaseConfig>(base)?.into_parts()?;
+            base_config.into_parts()?;
 
         Ok((
             port,
+            seed,
             Config {
                 headers,
                 latency_generator: latency,

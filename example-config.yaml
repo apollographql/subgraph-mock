@@ -2,6 +2,13 @@
 # but support for serving different subgraphs at different routes is planned
 port: 8080
 
+# Seed for the server's random number generator. Omit this to use
+# non-reproducible, OS-sourced randomness (the default). Setting it makes
+# response generation, latency waveforms, and error injection deterministic
+# across restarts, which is useful for reproducing a specific run.
+# Like "port", this is a global setting: it cannot be overridden per-subgraph.
+seed: 42
+
 # Whether or not cache responses against the hash of the request 'query' field
 # in order to reduce natural (non-injected) latency and resource usage.
 # This is not always desirable but is sometimes needed when working with graphs

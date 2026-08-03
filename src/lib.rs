@@ -4,7 +4,7 @@ use hyper_util::{
     rt::{TokioExecutor, TokioIo},
     server::conn::auto::Builder,
 };
-use state::{Config, State, default_port};
+use state::{Config, RngSource, State, default_port};
 use std::{fs, net::SocketAddr, path::PathBuf, sync::Arc};
 use tokio::net::TcpListener;
 use tracing::{error, info};
@@ -29,18 +29,19 @@ pub struct Args {
 impl Args {
     /// Load and initialise the configuration based on command line args
     pub fn init(self) -> anyhow::Result<(u16, State)> {
-        let (port, config) = match self.config {
+        let (port, seed, config) = match self.config {
             Some(path) => {
                 info!(path=%path.display(), "loading and parsing config file");
                 Config::parse_yaml(serde_yaml::from_slice(&fs::read(path)?)?)?
             }
             None => {
                 info!("using default config");
-                (default_port(), Config::default())
+                (default_port(), None, Config::default())
             }
         };
 
-        Ok((port, State::new(config, self.schema)?))
+        let rng = seed.map(RngSource::seeded).unwrap_or_default();
+        Ok((port, State::new(config, self.schema)?.with_rng(rng)))
     }
 }
 
