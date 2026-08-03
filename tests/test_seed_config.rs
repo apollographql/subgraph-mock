@@ -1,6 +1,6 @@
 use rand::RngExt;
 use std::path::PathBuf;
-use subgraph_mock::Args;
+use subgraph_mock::{Args, state::RngSource};
 
 fn pkg_path(relative: &str) -> PathBuf {
     PathBuf::from(format!("{}/{relative}", env!("CARGO_MANIFEST_DIR")))
@@ -24,19 +24,16 @@ fn configured_seed_is_reproducible() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Without a configured seed, the RNG falls back to OS-sourced entropy, which
-/// should not reproduce the same value run to run.
+/// Without a configured seed, the server should fall back to OS-sourced
+/// entropy rather than some other implicit fixed seed.
 #[test]
-fn unconfigured_seed_is_not_reproducible() -> anyhow::Result<()> {
-    let init = || -> anyhow::Result<u32> {
-        let args = Args {
-            config: None,
-            schema: pkg_path("tests/data/schema.graphql"),
-        };
-        let (_, state) = args.init()?;
-        Ok(state.rng.next().random_range(0..u32::MAX))
+fn unconfigured_seed_falls_back_to_os_rng() -> anyhow::Result<()> {
+    let args = Args {
+        config: None,
+        schema: pkg_path("tests/data/schema.graphql"),
     };
+    let (_, state) = args.init()?;
 
-    assert_ne!(init()?, init()?);
+    assert!(matches!(state.rng, RngSource::Os));
     Ok(())
 }
