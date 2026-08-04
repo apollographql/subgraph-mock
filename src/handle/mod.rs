@@ -20,6 +20,10 @@ where
 {
     let (parts, body) = req.into_parts();
     let (method, path) = (parts.method, parts.uri.path());
+    let include_ftv1 = parts
+        .headers
+        .get("apollo-federation-include-trace")
+        .is_some_and(|value| value.as_bytes() == b"ftv1");
     let body_bytes = body.collect().await?.to_bytes().to_vec();
 
     let config = state.config.read().await;
@@ -34,15 +38,35 @@ where
                 .nth(1)
                 .expect("split will yield at least 2 elements based on the match condition");
 
+            let rgen_cfg = config
+                .subgraph_overrides
+                .response_generation
+                .get(subgraph_name)
+                .unwrap_or(&config.response_generation);
+            let should_emit_ftv1 = rgen_cfg.ftv1.unwrap_or(include_ftv1);
+
             (
-                graphql::handle(body_bytes, Some(subgraph_name), state.clone()).await,
+                graphql::handle(
+                    body_bytes,
+                    Some(subgraph_name),
+                    state.clone(),
+                    should_emit_ftv1,
+                )
+                .await,
                 config
                     .subgraph_overrides
                     .latency_generator
                     .get(subgraph_name),
             )
         }
-        (&Method::POST, "/") => (graphql::handle(body_bytes, None, state.clone()).await, None),
+        (&Method::POST, "/") => {
+            let should_emit_ftv1 = config.response_generation.ftv1.unwrap_or(include_ftv1);
+
+            (
+                graphql::handle(body_bytes, None, state.clone(), should_emit_ftv1).await,
+                None,
+            )
+        }
 
         // default to 404
         (method, path) => {

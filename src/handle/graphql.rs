@@ -1,4 +1,5 @@
 use crate::{
+    ftv1,
     handle::ByteResponse,
     state::{Config, FederatedSchema, State},
 };
@@ -6,7 +7,7 @@ use anyhow::anyhow;
 use apollo_compiler::{
     ExecutableDocument, Name, Node,
     ast::OperationType,
-    executable::Field,
+    executable::{Field, Operation},
     request::coerce_variable_values,
     response::JsonMap,
     validation::{Valid, WithErrors},
@@ -42,6 +43,7 @@ pub async fn handle(
     body_bytes: Vec<u8>,
     subgraph_name: Option<&str>,
     state: Arc<State>,
+    should_emit_ftv1: bool,
 ) -> anyhow::Result<ByteResponse> {
     let req: GraphQLRequest = match serde_json::from_slice(&body_bytes) {
         Ok(req) => req,
@@ -74,6 +76,15 @@ pub async fn handle(
     schema.hash(&mut hasher);
     let cache_hash = hasher.finish();
 
+    // The cached response bytes are time-independent, but a trace is per-request, so capture just
+    // enough of the request to rebuild the trace after the (potentially cached) response bytes are
+    // produced, rather than threading `req` itself through the cached path.
+    let ftv1_req = should_emit_ftv1.then(|| GraphQLRequest {
+        query: req.query.clone(),
+        operation_name: req.operation_name.clone(),
+        variables: JsonMap::new(),
+    });
+
     // We draw exactly one RNG per request and thread it sequentially through  http-error injection, response
     // generation, and header injection. With a seeded `RngSource`, that gives stable aggregate counts under
     // concurrent dispatch.
@@ -96,6 +107,23 @@ pub async fn handle(
         into_response_bytes_and_status_code(rgen_cfg, req, &schema, cache_hash, &mut rng).await
     } else {
         generate_body(rgen_cfg, req, &schema, cache_hash, &mut rng).await
+    };
+
+    // FTV1 traces are spliced in here, off the cached hot path, so cached bytes stay byte-for-byte
+    // identical. Only 200 responses carry a trace; validation-error (400) and 5xx bodies are left
+    // untouched.
+    //
+    // `splice_ftv1_trace` calls `parse_and_validate` again to recover the document, relying on it
+    // already being populated: whichever branch above produced `bytes` (cached or not) internally
+    // called `generate_body`, which calls `parse_and_validate(&req, schema, cache_hash)` with this
+    // same `cache_hash`. Since that cache is keyed purely on `cache_hash` (see its `convert`
+    // attribute), the call below is guaranteed a cache hit, not a fresh parse — this load-bearing
+    // invariant is why `splice_ftv1_trace` doesn't need to handle a populate-on-miss cost itself.
+    let bytes = match ftv1_req {
+        Some(ftv1_req) if status_code == StatusCode::OK => {
+            splice_ftv1_trace(bytes, &ftv1_req, &schema, cache_hash)
+        }
+        _ => bytes,
     };
 
     let mut resp = Response::new(Full::new(bytes).map_err(|never| match never {}).boxed());
@@ -162,6 +190,62 @@ fn add_headers(
     headers.insert("Content-Type", HeaderValue::from_static("application/json"));
 }
 
+/// Rebuilds the operation's trace and splices it into the response's `extensions.ftv1` field.
+///
+/// The document is retrieved via the (already-populated) `parse_and_validate` cache, so this only
+/// pays for building, encoding, and re-serializing the trace. On any failure the original bytes are
+/// returned unchanged so a trace can never take down an otherwise-valid response.
+fn splice_ftv1_trace(
+    bytes: Bytes,
+    req: &GraphQLRequest,
+    schema: &FederatedSchema,
+    cache_hash: u64,
+) -> Bytes {
+    let Ok(doc) = parse_and_validate(req, schema, cache_hash) else {
+        return bytes;
+    };
+    let Some(op) = primary_operation(&doc) else {
+        return bytes;
+    };
+
+    let encoded = ftv1::encode_trace(&ftv1::Trace::build(op, &doc));
+
+    let mut value: Value = match serde_json::from_slice(bytes.as_ref()) {
+        Ok(value) => value,
+        Err(err) => {
+            error!(%err, "unable to parse response for ftv1 splicing");
+            return bytes;
+        }
+    };
+
+    let Some(response) = value.as_object_mut() else {
+        return bytes;
+    };
+    let extensions = response
+        .entry("extensions")
+        .or_insert_with(|| Value::Object(Map::new()));
+    if let Some(extensions) = extensions.as_object_mut() {
+        extensions.insert("ftv1", Value::String(encoded.into()));
+    }
+
+    match serde_json::to_vec(&value) {
+        Ok(spliced) => spliced.into(),
+        Err(err) => {
+            error!(%err, "unable to re-serialize response with ftv1 trace");
+            bytes
+        }
+    }
+}
+
+/// The operation a request executes: the first operation defined in the document.
+///
+/// Both response generation (`generate_body`) and FTV1 trace generation (`splice_ftv1_trace`) call
+/// this, so they're guaranteed to agree on which operation ran rather than merely computing the same
+/// thing independently.
+fn primary_operation(doc: &ExecutableDocument) -> Option<&Node<Operation>> {
+    doc.operations.iter().next()
+}
+
 #[cached(result = true, key = "u64", convert = "{_cache_hash}")]
 fn parse_and_validate(
     req: &GraphQLRequest,
@@ -207,7 +291,7 @@ async fn generate_body(
         }
     };
 
-    let op = doc.operations.iter().next().unwrap();
+    let op = primary_operation(&doc).unwrap();
     let op_name = op.name.as_ref().map(|name| name.as_str());
 
     debug!(
@@ -377,6 +461,8 @@ pub struct ResponseGenerationConfig {
     pub http_error_ratio: Option<Ratio>,
     #[serde(default)]
     pub graphql_errors: GraphQLErrorConfig,
+    #[serde(default)]
+    pub ftv1: Option<bool>,
 }
 
 impl ResponseGenerationConfig {
@@ -398,6 +484,7 @@ impl Default for ResponseGenerationConfig {
             header_ratio: BTreeMap::new(),
             graphql_errors: GraphQLErrorConfig::default(),
             http_error_ratio: None,
+            ftv1: None,
         }
     }
 }
