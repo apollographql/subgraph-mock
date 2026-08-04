@@ -208,8 +208,6 @@ fn splice_ftv1_trace(
         return bytes;
     };
 
-    let encoded = ftv1::encode_trace(&ftv1::Trace::build(op, &doc));
-
     let mut value: Value = match serde_json::from_slice(bytes.as_ref()) {
         Ok(value) => value,
         Err(err) => {
@@ -221,6 +219,13 @@ fn splice_ftv1_trace(
     let Some(response) = value.as_object_mut() else {
         return bytes;
     };
+
+    let mut trace = ftv1::Trace::build(op, &doc);
+    if let Some(errors) = response.get("errors").and_then(Value::as_array) {
+        populate_trace_errors(&mut trace, errors);
+    }
+    let encoded = ftv1::encode_trace(&trace);
+
     let extensions = response
         .entry("extensions")
         .or_insert_with(|| Value::Object(Map::new()));
@@ -234,6 +239,49 @@ fn splice_ftv1_trace(
             error!(%err, "unable to re-serialize response with ftv1 trace");
             bytes
         }
+    }
+}
+
+/// Populates `trace`'s error nodes from the response body's already-serialized `errors[]`, so the
+/// trace and response agree on errors by construction. Mirrors Apollo Server's rule: a path-less
+/// error (a whole-request failure) attaches to the root; a path-bearing error attaches to the
+/// `root.child` with the matching `response_name`, falling back to root if the path doesn't resolve.
+fn populate_trace_errors(trace: &mut ftv1::Trace, errors: &[Value]) {
+    let Some(root) = trace.root.as_mut() else {
+        return;
+    };
+
+    for error in errors {
+        let message = error
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let json = serde_json::to_string(error).unwrap_or_default();
+
+        let response_name = error
+            .get("path")
+            .and_then(Value::as_array)
+            .and_then(|path| path.first())
+            .and_then(Value::as_str);
+
+        let child_index = response_name.and_then(|name| {
+            root.child
+                .iter()
+                .position(|child| child.response_name == name)
+        });
+
+        let target = match child_index {
+            Some(index) => &mut root.child[index],
+            None => &mut *root,
+        };
+
+        target.error.push(ftv1::Error {
+            message,
+            location: Vec::new(),
+            time_ns: 0,
+            json,
+        });
     }
 }
 
@@ -353,7 +401,13 @@ fn generate_response(
     if let Some((numerator, denominator)) = cfg.graphql_errors.request_error_ratio
         && rng.random_ratio(numerator, denominator)
     {
-        return Ok(json!({ "data": null, "errors": [{ "message": "Request error simulated" }]}));
+        return Ok(json!({
+            "data": null,
+            "errors": [{
+                "message": "Request error simulated",
+                "extensions": { "code": "INTERNAL_SERVER_ERROR" },
+            }],
+        }));
     }
 
     // Short-circuit introspection responses if a request is *only* introspection. This does mean that requests
@@ -414,7 +468,8 @@ fn generate_response(
             .map(|key| {
                 json!({
                     "message": "Field error simulated",
-                    "path": [key]
+                    "path": [key],
+                    "extensions": { "code": "INTERNAL_SERVER_ERROR" },
                 })
             })
             .collect();

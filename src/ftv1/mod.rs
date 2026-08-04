@@ -69,6 +69,7 @@ impl Trace {
             parent_type: String::new(),
             start_time: 0,
             end_time: duration_ns,
+            error: Vec::new(),
             child,
         };
 
@@ -103,9 +104,36 @@ pub struct Node {
     /// End offset in nanoseconds, relative to [`Trace::start_time`].
     #[prost(uint64, tag = "9")]
     pub end_time: u64,
+    /// Errors attached to this field (request errors attach to the root instead).
+    #[prost(message, repeated, tag = "11")]
+    pub error: Vec<Error>,
     /// Child field nodes selected under this field.
     #[prost(message, repeated, tag = "12")]
     pub child: Vec<Node>,
+}
+
+/// A single GraphQL error, attached to the node its `path` resolves to (or to the root, for a
+/// path-less request error).
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Error {
+    /// The error message, copied verbatim from the response body.
+    #[prost(string, tag = "1")]
+    pub message: String,
+    #[prost(message, repeated, tag = "2")]
+    pub location: Vec<Location>,
+    #[prost(uint64, tag = "3")]
+    pub time_ns: u64,
+    /// The whole emitted error object (message, path, extensions, ...), re-serialized as JSON.
+    #[prost(string, tag = "4")]
+    pub json: String,
+}
+
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Location {
+    #[prost(uint32, tag = "1")]
+    pub line: u32,
+    #[prost(uint32, tag = "2")]
+    pub column: u32,
 }
 
 /// Encodes a [`Trace`] to the base64 (standard, padded) protobuf representation the router expects.
@@ -158,6 +186,7 @@ impl TraceBuilder<'_> {
                 parent_type: selection_set.ty.to_string(),
                 start_time,
                 end_time: self.clock,
+                error: Vec::new(),
                 child,
             });
         }

@@ -282,6 +282,94 @@ async fn aliases_and_fragments_are_traced() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Decodes an [`ftv1::Error::json`] string back into a [`Value`], the same shape the mock originally
+/// injected into the response body.
+fn error_json(error: &ftv1::Error) -> anyhow::Result<Value> {
+    Ok(serde_json::from_str(&error.json)?)
+}
+
+/// Asserts `error.json` round-trips to an object carrying the `extensions.code` the mock injects
+/// into both error shapes.
+fn assert_carries_extensions_code(error: &ftv1::Error) {
+    let json = error_json(error).expect("error.json should be valid JSON");
+    let code = json
+        .get("extensions")
+        .and_then(|extensions| extensions.get("code"))
+        .and_then(Value::as_str);
+    assert_eq!(
+        code,
+        Some("INTERNAL_SERVER_ERROR"),
+        "error.json should carry extensions.code: {json:?}"
+    );
+}
+
+#[tokio::test]
+async fn request_error_traces_on_root() -> anyhow::Result<()> {
+    let (_, state) = initialize(Some("ftv1_request_error.yaml"), None)?;
+
+    let response = send_request(QUERY.to_owned(), None, state, None, true).await?;
+    let body = response_json(response).await?;
+
+    let encoded = body
+        .get("extensions")
+        .and_then(|extensions| extensions.get("ftv1"))
+        .and_then(Value::as_str)
+        .expect("response should carry extensions.ftv1");
+
+    let trace = ftv1::decode_trace(encoded)?;
+    let root = trace.root.as_ref().expect("trace should have a root node");
+
+    assert_eq!(
+        root.error.len(),
+        1,
+        "the path-less request error should attach to root"
+    );
+    let error = &root.error[0];
+    assert_eq!(error.message, "Request error simulated");
+    assert_carries_extensions_code(error);
+
+    // The request error is a whole-operation failure, so no child node should carry it.
+    let user = child(root, "user");
+    assert!(user.error.is_empty());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn field_error_traces_on_named_child() -> anyhow::Result<()> {
+    let (_, state) = initialize(Some("ftv1_field_error.yaml"), None)?;
+
+    // `QUERY`'s only top-level field is `user`, so the mock's field-error injection (which only ever
+    // drops top-level fields) has exactly one field it can pick.
+    let response = send_request(QUERY.to_owned(), None, state, None, true).await?;
+    let body = response_json(response).await?;
+
+    let encoded = body
+        .get("extensions")
+        .and_then(|extensions| extensions.get("ftv1"))
+        .and_then(Value::as_str)
+        .expect("response should carry extensions.ftv1");
+
+    let trace = ftv1::decode_trace(encoded)?;
+    let root = trace.root.as_ref().expect("trace should have a root node");
+    assert!(
+        root.error.is_empty(),
+        "a field error should not attach to root"
+    );
+
+    let user = child(root, "user");
+    assert_eq!(
+        user.error.len(),
+        1,
+        "the field error's path should resolve to the `user` node"
+    );
+    let error = &user.error[0];
+    assert_eq!(error.message, "Field error simulated");
+    assert_carries_extensions_code(error);
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn validation_error_omits_trace() -> anyhow::Result<()> {
     let (_, state) = initialize(None, None)?;
