@@ -9,6 +9,7 @@ use std::{fs, net::SocketAddr, path::PathBuf, sync::Arc};
 use tokio::net::TcpListener;
 use tracing::{error, info};
 
+pub mod ftv1;
 pub mod handle;
 pub mod latency;
 pub mod state;
