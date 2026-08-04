@@ -1,0 +1,37 @@
+name: router-ftv1-validation
+description: |
+  Sends a single GraphQL request to the router and asserts, via mock-studio's
+  /request-stats endpoint, that the router received and correctly decoded the subgraph's
+  FTV1 trace with no anomalies (see subgraph-mock's SPEC_ftv1.md for emission and
+  mock-studio's SPEC_mock-studio-ftv1.md for the counters this checks).
+
+  This is a wiring/correctness check, not a load test: field_level_instrumentation_sampler
+  is set to always_on in this environment's router config, so a single request is enough
+  to make FTV1 arrival deterministic instead of sampled.
+
+variable_definitions:
+  - name: graphql_url
+    description: "The router's GraphQL endpoint, reachable over the docker-compose network"
+    default: "http://router:4000"
+
+  - name: mock_studio_url
+    description: "mock-studio's endpoint, reachable over the docker-compose network"
+    default: "http://mock-studio:1234"
+
+docker:
+  image: alpine
+  tag: latest
+  # Runs on the docker-compose network (RTF attaches this container to it automatically),
+  # so router/mock-studio are reachable by container name with no extra networking tricks.
+  command: >-
+    apk add --no-cache curl jq >/dev/null 2>&1 && sh "$VERIFY_SCRIPT"
+
+env_vars:
+  GRAPHQL_URL: "{{ graphql_url }}"
+  MOCK_STUDIO_URL: "{{ mock_studio_url }}"
+
+file_providers:
+  - name: verify-ftv1.sh
+    env_var: VERIFY_SCRIPT
+    kind: relative_path
+    path: scripts/verify-ftv1.sh
