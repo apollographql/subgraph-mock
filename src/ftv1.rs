@@ -289,7 +289,7 @@ mod tests {
     use apollo_compiler::validation::Valid;
 
     fn parse(query: &str) -> Valid<ExecutableDocument> {
-        let supergraph = include_str!("../../tests/data/schema.graphql");
+        let supergraph = include_str!("../tests/data/schema.graphql");
         let schema = FederatedSchema::parse_string(supergraph, "../../tests/data/schema.graphql")
             .expect("test schema should parse");
 
