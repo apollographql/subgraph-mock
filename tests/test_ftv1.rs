@@ -1,6 +1,7 @@
 use harness::{initialize, send_request, send_request_with_headers};
 use http_body_util::BodyExt;
 use serde_json_bytes::{Value, serde_json};
+use std::collections::HashSet;
 use subgraph_mock::ftv1::{self, Node};
 use subgraph_mock::handle::ByteResponse;
 
@@ -33,6 +34,7 @@ fragment UserContact on User {
 /// Collects a response body into its parsed JSON value.
 async fn response_json(response: ByteResponse) -> anyhow::Result<Value> {
     let bytes = response.into_body().collect().await?.to_bytes();
+
     Ok(serde_json::from_slice(&bytes)?)
 }
 
@@ -395,6 +397,96 @@ async fn validation_error_omits_trace() -> anyhow::Result<()> {
     assert!(
         body.get("extensions").is_none(),
         "a validation-error response should not carry a trace even with the ftv1 header"
+    );
+
+    Ok(())
+}
+
+/// Query against `schema_with_union` selecting both `Content` union members' fields. `title` and
+/// `content` are common to both `Post` and `Article`; `author { name }`/`views` are Post-only and
+/// `author { email }`/`citations` are Article-only.
+const UNION_QUERY: &str = r#"
+query {
+  user(id: "1") {
+    content {
+      __typename
+      ... on Post { title content author { name } views }
+      ... on Article { title content author { email } citations }
+    }
+  }
+}
+"#;
+
+#[tokio::test(flavor = "multi_thread")]
+async fn abstract_type_fragments_prune_to_actual_response_shape() -> anyhow::Result<()> {
+    let schema = "schema_with_union".to_string();
+    let (_, state) = initialize(Some("ftv1_union.yaml"), Some(&schema))?;
+
+    let mut saw_pruned_field = false;
+
+    for _ in 0..25 {
+        let response = send_request_with_headers(
+            UNION_QUERY.to_owned(),
+            Some(schema.clone()),
+            state.clone(),
+            None,
+            false,
+            &[FTV1_HEADER],
+        )
+        .await?;
+        let body = response_json(response).await?;
+
+        let content_array = body
+            .get("data")
+            .and_then(|data| data.get("user"))
+            .and_then(|user| user.get("content"))
+            .and_then(Value::as_array)
+            .expect("content should be an array");
+        assert!(
+            !content_array.is_empty(),
+            "ftv1_union.yaml's forced array length should keep this non-empty"
+        );
+
+        // The response keys that actually appeared across every generated `content` element.
+        let mut actual_keys: HashSet<&str> = HashSet::new();
+        for element in content_array {
+            if let Some(object) = element.as_object() {
+                actual_keys.extend(object.keys().map(|key| key.as_str()));
+            }
+        }
+
+        let encoded = body
+            .get("extensions")
+            .and_then(|extensions| extensions.get("ftv1"))
+            .and_then(Value::as_str)
+            .expect("response should carry extensions.ftv1");
+        let trace = ftv1::decode_trace(encoded)?;
+        let root = trace.root.expect("trace should have a root node");
+        let user = child(&root, "user");
+        let content = child(user, "content");
+
+        for traced in &content.child {
+            assert!(
+                actual_keys.contains(traced.response_name.as_str()),
+                "trace claims field `{}`, which never appeared in any generated `content` element \
+                 ({actual_keys:?})",
+                traced.response_name
+            );
+        }
+
+        // The query spans 5 fields across both union members (excluding `__typename`): `title`,
+        // `content`, `author`, `views` (Post-only), `citations` (Article-only). If the trace ever
+        // comes back with fewer than all 5, pruning actually dropped something rather than always
+        // taking the permissive "no info" fallback.
+        if content.child.len() < 5 {
+            saw_pruned_field = true;
+        }
+    }
+
+    assert!(
+        saw_pruned_field,
+        "expected at least one of the 25 requests to generate a `content` list missing one union \
+         member's fields, proving `prune_to_response` drops the fields that don't apply"
     );
 
     Ok(())

@@ -54,9 +54,10 @@ Traces are approximate rather than exact reproductions of a real subgraph's timi
   the per-element `index` nodes real traces use, so per-element timing isn't represented.
 - Timing is synthetic — spans nest and stay ordered, but `duration_ns` bears no relation to the
   request's real duration or to any configured latency injection.
-- Interface and union (abstract-typed) fragments are approximate: the trace includes every field
-  reachable through any fragment branch, since it has no way to know which concrete type the
-  response actually resolved to for a given element.
+- Interface and union (abstract-typed) fragments are pooled across a list's elements rather than
+  resolved per element: the trace's field set is pruned to match what the response actually
+  generated (a field never present in any element won't appear), but a field present on some
+  elements and not others still shows up once, with no way to say which element(s) had it.
 
 None of these prevent the router from decoding, redacting, stitching, or reporting the trace — they
 only affect timing and field-usage fidelity for abstract-typed queries.

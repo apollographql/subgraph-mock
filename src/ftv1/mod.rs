@@ -51,14 +51,14 @@ pub struct Trace {
 }
 
 impl Trace {
-    /// Builds a [`Trace`] whose node tree mirrors the operation's selection set.
+    /// Builds the node tree for an operation's selection set and its total synthetic duration,
+    /// without stamping a wall-clock window around it.
     ///
     /// Timing is synthetic: a running nanosecond clock assigns each node a `start_time`, recurses
-    /// into its children (advancing the clock), then adds a fixed per-node cost before recording
-    /// `end_time`, so child spans nest within their parent and siblings stay ordered.
-    pub fn build(op: &Operation, doc: &ExecutableDocument) -> Trace {
-        let start = SystemTime::now();
-
+    /// into its children, then adds a fixed per-node cost as `end_time`, so spans nest and stay
+    /// ordered. A pure function of `op`/`doc` — no RNG, no wall clock — so callers can safely cache
+    /// it (see `cached_trace_shape` in `handle/graphql.rs`).
+    pub fn build_shape(op: &Operation, doc: &ExecutableDocument) -> (Node, u64) {
         let mut builder = TraceBuilder { doc, clock: 0 };
         let child = builder.nodes(&op.selection_set);
         let duration_ns = builder.clock;
@@ -73,12 +73,30 @@ impl Trace {
             child,
         };
 
+        (root, duration_ns)
+    }
+
+    /// Stamps a fresh wall-clock window around an already-built (possibly cached) node tree, so a
+    /// reused shape still gets its own [`Trace::start_time`]/[`Trace::end_time`] rather than the
+    /// instant it was first computed.
+    pub fn from_shape(root: Node, duration_ns: u64) -> Trace {
+        let start = SystemTime::now();
+
         Trace {
             start_time: Some(start.into()),
             end_time: Some((start + Duration::from_nanos(duration_ns)).into()),
             duration_ns,
             root: Some(root),
         }
+    }
+
+    /// Builds a complete [`Trace`], combining [`Trace::build_shape`] with a fresh wall-clock window
+    /// from [`Trace::from_shape`]. Convenience for callers that have no reason to cache the shape
+    /// separately (e.g. this module's own tests).
+    pub fn build(op: &Operation, doc: &ExecutableDocument) -> Trace {
+        let (root, duration_ns) = Self::build_shape(op, doc);
+
+        Self::from_shape(root, duration_ns)
     }
 }
 
@@ -211,17 +229,18 @@ fn merged_child_selections(fields: &[&apollo_compiler::Node<Field>]) -> Selectio
 }
 
 /// Flattens a selection set into `(response_name, fields)` groups in query order, following fragment
-/// spreads and inline fragments (their type conditions are ignored — extra fields are harmless).
-/// Fields sharing a response key are merged into one group, so a field selected from several places
-/// yields a single node whose sub-selections are the union of those selections.
+/// spreads and inline fragments. Fields sharing a response key are merged into one group, so a field
+/// selected from several places yields a single node whose sub-selections are the union of those
+/// selections.
 ///
-/// This is FTV1's own traversal, independent of response generation: `apollo-smith` 0.16's
-/// `ResponseBuilder` resolves each abstract-typed field to a concrete type (via an RNG draw)
-/// *before* collecting fields, so its traversal knows which fragment type conditions actually
-/// matched for a given response element. This function makes a type-condition-blind pass instead,
-/// so the two traversals can diverge under interface/union fragments — the trace may include fields
-/// a given response element never had. That divergence is an accepted approximation (see
-/// `SPEC_ftv1.md`'s "Known approximations"), not a bug to fix here.
+/// This ignores fragment type conditions, unlike `apollo-smith`'s own field collection, which
+/// resolves each abstract-typed field to a concrete type before collecting — so on its own this
+/// would over-include fields from every fragment branch in the query, not just the branch a given
+/// response element actually took. `handle/graphql.rs::prune_to_response` corrects that afterward by
+/// checking the built tree against the real response (see its doc comment for why that check isn't
+/// done here instead). What that leaves as an accepted approximation is list flattening: elements
+/// are pooled before pruning, so a field present on *any* element of a heterogeneous list still
+/// shows up once, with no per-element index nodes to place it precisely.
 fn collect_fields<'a>(
     doc: &'a ExecutableDocument,
     selection_set: &'a SelectionSet,
@@ -384,6 +403,29 @@ mod tests {
             "`__typename` should be skipped, leaving only `name`"
         );
         assert_eq!(user.child[0].response_name, "name");
+    }
+
+    #[test]
+    fn from_shape_stamps_a_fresh_wall_clock_window_each_call() {
+        let doc = parse(r#"{ user(id: "1") { name } }"#);
+        let op = doc.operations.iter().next().unwrap();
+        let (root, duration_ns) = Trace::build_shape(op, &doc);
+
+        let first = Trace::from_shape(root.clone(), duration_ns);
+        std::thread::sleep(Duration::from_millis(2));
+        let second = Trace::from_shape(root, duration_ns);
+
+        // Same shape both times (as a cache hit would give), but each `from_shape` call still gets
+        // its own fresh wall-clock window — why `cached_trace_shape` caches only the shape, never a
+        // whole `Trace`.
+        assert_eq!(first.duration_ns, second.duration_ns);
+        assert_eq!(first.root, second.root);
+
+        let as_tuple = |ts: &prost_types::Timestamp| (ts.seconds, ts.nanos);
+        assert!(
+            as_tuple(&second.start_time.unwrap()) > as_tuple(&first.start_time.unwrap()),
+            "second call should be stamped strictly after the first"
+        );
     }
 
     #[test]
