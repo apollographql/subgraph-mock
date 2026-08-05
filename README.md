@@ -35,6 +35,13 @@ This mock server has partial Federation v2 support. It can understand and parse 
 that use the built-in Federation v2 directives. It does not currently do any actual resolution of
 the `@link` directive, so any imports or renames as specified in that directive will not work.
 
+`_entities` queries resolve the way a real subgraph's entity resolvers would: the response list
+contains exactly one entry per representation, in order, with each representation's values
+(including nested key fields) echoed back and each entry's concrete type taken from the
+representation's `__typename`. Fields not present in the representation are randomly generated as
+usual. This means a federated router can merge the mock's entity responses back into its client
+response correctly.
+
 #### Subgraph Overrides
 
 If your test scenario calls for behavioral differences between subgraphs, the mock server will

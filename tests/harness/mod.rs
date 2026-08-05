@@ -152,6 +152,29 @@ pub async fn send_request<T>(
 where
     T: Borrow<Option<String>>,
 {
+    send_request_with_variables(
+        operation_def,
+        JsonMap::new(),
+        schema_name,
+        state,
+        subgraph_name,
+        validate,
+    )
+    .await
+}
+
+/// Like [`send_request`], but with request variables.
+pub async fn send_request_with_variables<T>(
+    operation_def: String,
+    variables: JsonMap,
+    schema_name: Option<String>,
+    state: Arc<State>,
+    subgraph_name: T,
+    validate: bool,
+) -> anyhow::Result<ByteResponse>
+where
+    T: Borrow<Option<String>>,
+{
     let uri = match subgraph_name.borrow() {
         Some(name) => format!("/{name}"),
         None => "/".to_owned(),
@@ -160,7 +183,7 @@ where
     let body = serde_json::to_vec(&GraphQLRequest {
         query: operation_def.clone(),
         operation_name: None,
-        variables: JsonMap::new(),
+        variables,
     })?;
 
     let req = Request::builder()

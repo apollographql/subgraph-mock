@@ -6,7 +6,7 @@ use anyhow::anyhow;
 use apollo_compiler::{
     ExecutableDocument, Name, Node,
     ast::OperationType,
-    executable::Field,
+    executable::{Field, Operation, Selection},
     request::coerce_variable_values,
     response::JsonMap,
     validation::{Valid, WithErrors},
@@ -70,6 +70,14 @@ pub async fn handle(
     // demand a high cardinality of config/schema setups, we can set up more intelligent caching with invalidation.
     let mut hasher = DefaultHasher::new();
     req.query.hash(&mut hasher);
+    // `_entities` responses echo the representations from the request, so they vary with
+    // the variables, not just the query text. The string check is a cheap over-approximation:
+    // false positives only cost cache hits, never correctness.
+    if req.query.contains("_entities") {
+        serde_json::to_vec(&req.variables)
+            .unwrap_or_default()
+            .hash(&mut hasher);
+    }
     rgen_cfg.hash(&mut hasher);
     schema.hash(&mut hasher);
     let cache_hash = hasher.finish();
@@ -309,6 +317,10 @@ fn generate_response(
         builder = builder.with_generator(Name::new_unchecked(name.as_str()), *generator);
     }
 
+    if let Some(partial_data) = entities_partial_data(op, variables) {
+        builder = builder.with_partial_data(partial_data);
+    }
+
     builder = builder.with_operation_name(op_name);
 
     let data = builder.build_data().map_err(|err| anyhow!("{}", err))?;
@@ -342,6 +354,73 @@ fn generate_response(
     } else {
         Ok(json!({ "data": data }))
     }
+}
+
+/// Build partial response data aligning any root `_entities` fields with the request's
+/// representations: the generated list gets exactly one entry per representation, in
+/// order, echoing each representation's values, with `__typename` selecting the entry's
+/// concrete type. Without this, entity lists come back with arbitrary lengths and key
+/// values, which a federated router cannot merge back into its client response.
+fn entities_partial_data(operation: &Operation, variables: &JsonMap) -> Option<Value> {
+    let mut partial = Map::new();
+    for selection in &operation.selection_set.selections {
+        let Selection::Field(field) = selection else {
+            continue;
+        };
+        if field.name != "_entities" {
+            continue;
+        }
+        let Some(representations) = field
+            .arguments
+            .iter()
+            .find(|arg| arg.name == "representations")
+            .and_then(|arg| ast_value_to_json(&arg.value, variables))
+        else {
+            continue;
+        };
+        let key = field.alias.as_ref().unwrap_or(&field.name).to_string();
+        partial.insert(key, representations);
+    }
+    if partial.is_empty() {
+        None
+    } else {
+        Some(Value::Object(partial))
+    }
+}
+
+/// Convert a GraphQL argument value into JSON, resolving variable references from the
+/// request's variables. Returns `None` if a referenced variable was not provided or a
+/// number does not fit its JSON representation.
+fn ast_value_to_json(value: &apollo_compiler::ast::Value, variables: &JsonMap) -> Option<Value> {
+    use apollo_compiler::ast::Value as AstValue;
+    Some(match value {
+        AstValue::Variable(name) => variables.get(name.as_str())?.clone(),
+        AstValue::Null => Value::Null,
+        AstValue::Enum(name) => Value::String(name.as_str().into()),
+        AstValue::String(s) => Value::String(s.as_str().into()),
+        AstValue::Boolean(b) => Value::Bool(*b),
+        AstValue::Int(i) => Value::Number(i.as_str().parse::<i64>().ok()?.into()),
+        AstValue::Float(f) => Value::Number(serde_json::Number::from_f64(
+            f.as_str().parse::<f64>().ok()?,
+        )?),
+        AstValue::List(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| ast_value_to_json(item, variables))
+                .collect::<Option<Vec<_>>>()?,
+        ),
+        AstValue::Object(fields) => Value::Object(
+            fields
+                .iter()
+                .map(|(name, value)| {
+                    Some((
+                        ByteString::from(name.as_str().to_owned()),
+                        ast_value_to_json(value, variables)?,
+                    ))
+                })
+                .collect::<Option<Map<_, _>>>()?,
+        ),
+    })
 }
 
 pub type Ratio = (u32, u32);
