@@ -1,27 +1,33 @@
 //! Simple latency generation
-use serde::{Deserialize, Serialize};
+use apollo_configuration::configuration;
+use apollo_configuration::types::Duration as ConfigDuration;
+use serde::Serialize;
 use std::f64::consts::PI;
 use tokio::time::{Duration, Instant};
 use tracing::trace;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[configuration]
+#[derive(Copy, Serialize)]
 pub struct LatencyConfig {
-    #[serde(deserialize_with = "humantime_serde::deserialize")]
-    pub base: Duration,
+    /// Base latency to apply _after_ response generation.
+    #[config(default = ConfigDuration::from(Duration::from_millis(5)))]
+    pub base: ConfigDuration,
     pub saw: Option<Shape>,
     pub sine: Option<Shape>,
     pub square: Option<Shape>,
     pub triangle: Option<Shape>,
 }
 
-impl Default for LatencyConfig {
-    fn default() -> Self {
+impl LatencyConfig {
+    /// The latency config used only when there is no config gile or the`latency:` key is absent
+    /// from the YAML entirely
+    pub fn default_with_sine() -> Self {
         Self {
-            base: Duration::from_millis(5),
+            base: Duration::from_millis(5).into(),
             saw: None,
             sine: Some(Shape {
-                amplitude: Duration::from_millis(2),
-                period: Duration::from_secs(10),
+                amplitude: Duration::from_millis(2).into(),
+                period: Duration::from_secs(10).into(),
             }),
             square: None,
             triangle: None,
@@ -29,12 +35,13 @@ impl Default for LatencyConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[configuration]
+#[derive(Copy, Serialize)]
 pub struct Shape {
-    #[serde(deserialize_with = "humantime_serde::deserialize")]
-    pub amplitude: Duration,
-    #[serde(deserialize_with = "humantime_serde::deserialize")]
-    pub period: Duration,
+    #[config(required)]
+    pub amplitude: ConfigDuration,
+    #[config(required)]
+    pub period: ConfigDuration,
 }
 
 #[derive(Debug, Clone, Copy)]

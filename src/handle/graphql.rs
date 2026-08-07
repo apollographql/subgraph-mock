@@ -12,6 +12,7 @@ use apollo_compiler::{
     response::JsonMap,
     validation::{Valid, WithErrors},
 };
+use apollo_configuration::{Validate, configuration};
 use apollo_smith::{
     BooleanGenerator, FloatGenerator, Generator, Generators, IntGenerator, RandProvider,
     RandomProvider, ResponseBuilder, ResponseError, StringGenerator,
@@ -26,6 +27,7 @@ use hyper::{
 use indexmap::IndexMap;
 use ordered_float::OrderedFloat;
 use rand::{RngExt, SeedableRng, rngs::StdRng, seq::IteratorRandom};
+use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json_bytes::{
     ByteString, Map, Value, json,
@@ -90,7 +92,7 @@ pub async fn handle(
     // concurrent dispatch.
     let mut rng = state.rng.next();
 
-    if let Some((numerator, denominator)) = rgen_cfg.http_error_ratio
+    if let Some(Ratio(numerator, denominator)) = rgen_cfg.http_error_ratio
         && rng.random_ratio(numerator, denominator)
     {
         return Response::builder()
@@ -180,7 +182,7 @@ fn add_headers(
         }
 
         let should_insert = last_ratio
-            .is_none_or(|(numerator, denominator)| rng.random_ratio(numerator, denominator));
+            .is_none_or(|Ratio(numerator, denominator)| rng.random_ratio(numerator, denominator));
 
         if should_insert {
             headers.insert(&last_header_name, header_value);
@@ -492,7 +494,7 @@ fn generate_response(
         Err(_) => return Ok(json!({ "data": null })),
     };
 
-    if let Some((numerator, denominator)) = cfg.graphql_errors.request_error_ratio
+    if let Some(Ratio(numerator, denominator)) = cfg.graphql_errors.request_error_ratio
         && rng.random_ratio(numerator, denominator)
     {
         return Ok(json!({
@@ -533,7 +535,7 @@ fn generate_response(
             },
         );
 
-    if let Some((numerator, denominator)) = cfg.null_ratio {
+    if let Some(Ratio(numerator, denominator)) = cfg.null_ratio {
         builder = builder.with_null_ratio(numerator, denominator);
     }
 
@@ -547,7 +549,7 @@ fn generate_response(
 
     // Select a random number of top-level fields to "fail" if we are going to have field errors. For the sake of
     // simplicity and performance, we won't traverse deeper into the response object.
-    if let Some((numerator, denominator)) = cfg.graphql_errors.field_error_ratio
+    if let Some(Ratio(numerator, denominator)) = cfg.graphql_errors.field_error_ratio
         && rng.random_ratio(numerator, denominator)
     {
         let mut data = data.as_object().cloned().unwrap_or_default();
@@ -577,9 +579,14 @@ fn generate_response(
     }
 }
 
-pub type Ratio = (u32, u32);
+/// A `(numerator, denominator)` ratio, e.g. `[1, 2]` for "1 in 2".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct Ratio(pub u32, pub u32);
 
-#[derive(Debug, Default, Clone, Hash, Serialize, Deserialize)]
+impl Validate for Ratio {}
+
+#[configuration]
+#[derive(Hash, Serialize)]
 pub struct GraphQLErrorConfig {
     /// The ratio of GraphQL requests that should be responded to with a request error and no data.
     ///
@@ -596,21 +603,19 @@ pub struct GraphQLErrorConfig {
     pub field_error_ratio: Option<Ratio>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Hash)]
+#[configuration]
+#[derive(Hash, Serialize)]
 pub struct ResponseGenerationConfig {
-    #[serde(default = "default_scalar_config")]
+    #[config(default = default_scalar_config(), skip_validate)]
     pub scalars: BTreeMap<String, ScalarGenerator>,
-    #[serde(default = "default_array_size")]
+    #[config(default = default_array_size())]
     pub array: ArraySize,
-    #[serde(default = "default_null_ratio")]
+    #[config(default = default_null_ratio())]
     pub null_ratio: Option<Ratio>,
-    #[serde(default)]
-    pub header_ratio: BTreeMap<String, (u32, u32)>,
-    #[serde(default)]
+    #[config(skip_validate)]
+    pub header_ratio: BTreeMap<String, Ratio>,
     pub http_error_ratio: Option<Ratio>,
-    #[serde(default)]
     pub graphql_errors: GraphQLErrorConfig,
-    #[serde(default)]
     pub ftv1: Option<bool>,
 }
 
@@ -621,20 +626,6 @@ impl ResponseGenerationConfig {
         let default = default_scalar_config();
         let provided = mem::replace(&mut self.scalars, default);
         self.scalars.extend(provided);
-    }
-}
-
-impl Default for ResponseGenerationConfig {
-    fn default() -> Self {
-        Self {
-            scalars: default_scalar_config(),
-            array: default_array_size(),
-            null_ratio: default_null_ratio(),
-            header_ratio: BTreeMap::new(),
-            graphql_errors: GraphQLErrorConfig::default(),
-            http_error_ratio: None,
-            ftv1: None,
-        }
     }
 }
 
@@ -670,15 +661,20 @@ fn default_array_size() -> ArraySize {
 }
 
 fn default_null_ratio() -> Option<Ratio> {
-    Some((1, 2))
+    Some(Ratio(1, 2))
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Hash)]
+// Kept as a hand-rolled (non-`#[configuration]`) type: `#[configuration]` enums are always
+// externally tagged by variant name (e.g. `{int: {min: 0, max: 100}}`), with no way to opt into
+// the internally-tagged `{type: int, min: 0, max: 100}` shape configured below
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Hash, JsonSchema)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ScalarGenerator {
     Bool,
     Float {
+        #[schemars(with = "f64")]
         min: OrderedFloat<f64>,
+        #[schemars(with = "f64")]
         max: OrderedFloat<f64>,
     },
     Int {
@@ -753,9 +749,12 @@ impl<R: RandomProvider> Generator<R> for SdlOverride {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Hash)]
+#[configuration]
+#[derive(Copy, Hash, Serialize)]
 pub struct ArraySize {
+    #[config(required)]
     pub min_length: usize,
+    #[config(required)]
     pub max_length: usize,
 }
 

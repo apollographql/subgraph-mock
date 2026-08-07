@@ -3,11 +3,11 @@ use crate::{
     latency::{LatencyConfig, LatencyGenerator},
 };
 use anyhow::Error;
+use apollo_configuration::{ParseYamlOptions, configuration};
 use hyper::{
     HeaderMap,
     header::{HeaderName, HeaderValue},
 };
-use serde::{Deserialize, Serialize};
 use serde_json_bytes::serde_json;
 use serde_yaml::Value;
 use std::collections::HashMap;
@@ -17,22 +17,19 @@ use tracing::{info, warn};
 /// neither want nor need that data structure to be recursive.
 const SUBGRAPH_OVERRIDES_KEY: &str = "subgraph_overrides";
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[configuration]
 struct BaseConfig {
-    #[serde(default = "default_port")]
+    #[config(default = default_port())]
     pub port: u16,
     /// Seed for the server's random number generator. Omit for non-reproducible
     /// (OS-sourced) randomness. Global only: setting this in a subgraph override
     /// has no effect, since all subgraphs share a single RNG.
-    #[serde(default)]
     pub seed: Option<u64>,
-    #[serde(default)]
     pub headers: HashMap<String, String>,
-    #[serde(default)]
+    #[config(default = LatencyConfig::default_with_sine())]
     pub latency: LatencyConfig,
-    #[serde(default)]
     pub response_generation: ResponseGenerationConfig,
-    #[serde(default = "default_cache_responses")]
+    #[config(default = default_cache_responses())]
     pub cache_responses: bool,
 }
 
@@ -42,19 +39,6 @@ pub fn default_port() -> u16 {
 
 fn default_cache_responses() -> bool {
     true
-}
-
-impl Default for BaseConfig {
-    fn default() -> Self {
-        Self {
-            port: default_port(),
-            seed: Default::default(),
-            headers: Default::default(),
-            latency: Default::default(),
-            response_generation: Default::default(),
-            cache_responses: default_cache_responses(),
-        }
-    }
 }
 
 impl BaseConfig {
@@ -113,7 +97,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             headers: Default::default(),
-            latency_generator: LatencyGenerator::new(LatencyConfig::default()),
+            latency_generator: LatencyGenerator::new(LatencyConfig::default_with_sine()),
             response_generation: Default::default(),
             cache_responses: default_cache_responses(),
             subgraph_overrides: Default::default(),
@@ -152,7 +136,11 @@ impl Config {
                         }
 
                         merge_yaml(subgraph_override, &mut subgraph_config);
-                        let parsed_config: BaseConfig = serde_yaml::from_value(subgraph_config)?;
+                        let subgraph_config_text = serde_yaml::to_string(&subgraph_config)?;
+                        let parsed_config: BaseConfig = apollo_configuration::parse_yaml(
+                            &subgraph_config_text,
+                            &ParseYamlOptions::default(),
+                        )?;
                         let subgraph_name: String = serde_yaml::from_value(subgraph_name)?;
 
                         info!("generating customized config for {}", subgraph_name);
@@ -176,7 +164,9 @@ impl Config {
             }
         }
 
-        let base_config = serde_yaml::from_value::<BaseConfig>(base)?;
+        let base_config_text = serde_yaml::to_string(&base)?;
+        let base_config: BaseConfig =
+            apollo_configuration::parse_yaml(&base_config_text, &ParseYamlOptions::default())?;
         let seed = base_config.seed;
         info!(seed = ?seed, "rng seed");
 
