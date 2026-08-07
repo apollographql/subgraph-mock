@@ -1,0 +1,60 @@
+name: Subgraph mock router integration
+description: |
+  Orchestrator-compatible docker compose environment for router testing.
+
+  This environment runs:
+  - Router with the specified version
+  - Mock subgraphs behind nginx loadbalancer
+  - Mock Studio for usage reporting
+
+  Logs for all services are collected and the router forwards OTEL metrics to the rtf otel collector
+
+  OTEL labels are created for the ROUTER_TAG (version), GRAPH_REF and TEST_NAME
+
+variable_definitions:
+  - name: router_image
+    description: "The Docker image path for the router minus the tag"
+    default: "ghcr.io/apollographql/router"
+
+  - name: router_tag
+    description: "The router docker image tag being tested"
+
+  - name: subgraph_image
+    description: "The subgraph docker image:tag"
+    default: "us-central1-docker.pkg.dev/platform-cross-environment/apollo-private-docker/subgraph-mock:edge"
+
+project_name: "subgraph-mock-router"
+
+compose_files:
+  - name: compose.yaml
+    kind: relative_path
+    path: data/docker-compose.yaml
+
+file_providers:
+  - name: subgraph-config.yaml
+    env_var: SUBGRAPH_CONFIG_FILE
+    kind: relative_path
+    path: data/subgraph-config.yaml
+
+  - name: router-config.yaml
+    env_var: ROUTER_CONFIG
+    kind: relative_path
+    path: data/router-config.yaml
+
+  - name: supergraph.graphql
+    env_var: SUPERGRAPH_SCHEMA
+    kind: relative_path
+    path: ../../tests/data/schema.graphql
+
+  - name: license.jwt
+    env_var: LICENSE_FILE
+    kind: offline_graphos_license
+    graph_id: "starstuff"
+
+env_vars:
+  # Router configuration
+  ROUTER_IMAGE: "{{ router_image }}"
+  ROUTER_TAG: "{{ router_tag }}"
+
+  # Subgraph configuration
+  SUBGRAPH_IMAGE: "{{ subgraph_image }}"

@@ -1,0 +1,67 @@
+services:
+  router:
+    image: ${ROUTER_IMAGE}:${ROUTER_TAG}
+    labels:
+      rtf.io/file-providers: true
+      rtf.io/log-collection: true
+    container_name: router
+    environment:
+      APOLLO_KEY: "MOCK_APOLLO_KEY"
+      APOLLO_GRAPH_REF: "mock@ref"
+      APOLLO_USAGE_REPORTING_INGRESS_URL: http://mock-studio:1234/studio
+    ports:
+      - "4000:4000"
+      - "9090:9090"
+      - "8089:8089"
+    # The entrypoint in the Docker image is /dist/router_wrapper.sh
+    # We provide arguments directly, and use bash parameter expansion to handle the optional license
+    # telemetry.apollo (usage reporting + tracing) only activates with a real graph identity: an
+    # offline license lets the router validate that identity locally instead of calling Apollo's
+    # live uplink, which would reject the placeholder APOLLO_KEY above outright.
+    command: >
+      -s ${SUPERGRAPH_SCHEMA} -c ${ROUTER_CONFIG} --hot-reload --license ${LICENSE_FILE:-/dev/null}
+    restart: unless-stopped
+
+  # The router image does not have curl or wget installed so we cannot run a health check on it directly
+  # This side car uses the curl image to query the health endpoint of the router and set its own health status
+  # We can then infer the health of the router from the health of this side car.
+  router-healthcheck:
+    image: curlimages/curl:latest
+    container_name: router-healthcheck
+    depends_on:
+      - router
+    # This keeps the container alive so it can run the health checks
+    command: ["tail", "-f", "/dev/null"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://router:4000/health | grep -q UP"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  mock-studio:
+    container_name: mock-studio
+    image: us-central1-docker.pkg.dev/platform-cross-environment/apollo-private-docker/mock-studio:edge
+    # :edge is a moving tag - without this, `docker compose up` reuses whatever copy is
+    # already cached locally instead of checking for a newer push.
+    pull_policy: always
+    labels:
+      rtf.io/log-collection: true
+    restart: unless-stopped
+    ports:
+      - "1234:1234"
+
+  subgraph:
+    image: ${SUBGRAPH_IMAGE}
+    labels:
+      rtf.io/file-providers: true
+      rtf.io/log-collection: true
+    container_name: subgraph-mock
+    command:
+      - --schema
+      - ${SUPERGRAPH_SCHEMA}
+      - --config
+      - ${SUBGRAPH_CONFIG_FILE}
+    expose:
+      - "8080"
+    restart: unless-stopped

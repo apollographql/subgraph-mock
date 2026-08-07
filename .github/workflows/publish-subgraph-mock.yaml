@@ -5,6 +5,9 @@ on:
     branches:
       - main
       - test
+  pull_request:
+    branches:
+      - main
 
 env:
   REGISTRY: ghcr.io
@@ -24,3 +27,24 @@ jobs:
       image_name: 'subgraph-mock'
       platforms: '[{"platform":"linux/amd64","runner":"ubuntu-24.04"},{"platform":"linux/arm64","runner":"ubuntu-24.04-arm"}]'
     secrets: inherit
+
+  rtf-validate-router-integration:
+    name: Validate against router via RTF
+    needs: publish-subgraph-mock-image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Write RTF template variables
+        env:
+          SUBGRAPH_IMAGE: us-central1-docker.pkg.dev/platform-cross-environment/apollo-private-docker/subgraph-mock:${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          printf '{"subgraph_image": "%s"}\n' "$SUBGRAPH_IMAGE" > rtf-vars.json
+
+      - uses: apollographql/release-tooling/rtf-orchestrator-run@94ecd82357269606853d52e94c3cebf78f29abf4
+        with:
+          test_plan_path: test-plans/router-integration/test-plan.yaml
+          vars_file: rtf-vars.json

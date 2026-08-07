@@ -1,4 +1,5 @@
 use crate::{
+    ftv1,
     handle::ByteResponse,
     state::{Config, FederatedSchema, State},
 };
@@ -6,7 +7,7 @@ use anyhow::anyhow;
 use apollo_compiler::{
     ExecutableDocument, Name, Node,
     ast::OperationType,
-    executable::Field,
+    executable::{Field, Operation},
     request::coerce_variable_values,
     response::JsonMap,
     validation::{Valid, WithErrors},
@@ -42,6 +43,7 @@ pub async fn handle(
     body_bytes: Vec<u8>,
     subgraph_name: Option<&str>,
     state: Arc<State>,
+    should_emit_ftv1: bool,
 ) -> anyhow::Result<ByteResponse> {
     let req: GraphQLRequest = match serde_json::from_slice(&body_bytes) {
         Ok(req) => req,
@@ -74,6 +76,15 @@ pub async fn handle(
     schema.hash(&mut hasher);
     let cache_hash = hasher.finish();
 
+    // The cached response bytes are time-independent, but a trace is per-request, so capture just
+    // enough of the request to rebuild the trace after the (potentially cached) response bytes are
+    // produced, rather than threading `req` itself through the cached path.
+    let ftv1_req = should_emit_ftv1.then(|| GraphQLRequest {
+        query: req.query.clone(),
+        operation_name: req.operation_name.clone(),
+        variables: JsonMap::new(),
+    });
+
     // We draw exactly one RNG per request and thread it sequentially through  http-error injection, response
     // generation, and header injection. With a seeded `RngSource`, that gives stable aggregate counts under
     // concurrent dispatch.
@@ -96,6 +107,23 @@ pub async fn handle(
         into_response_bytes_and_status_code(rgen_cfg, req, &schema, cache_hash, &mut rng).await
     } else {
         generate_body(rgen_cfg, req, &schema, cache_hash, &mut rng).await
+    };
+
+    // FTV1 traces are spliced in here, off the cached hot path, so cached bytes stay byte-for-byte
+    // identical. Only 200 responses carry a trace; validation-error (400) and 5xx bodies are left
+    // untouched.
+    //
+    // `splice_ftv1_trace` calls `parse_and_validate` again to recover the document, relying on it
+    // already being populated: whichever branch above produced `bytes` (cached or not) internally
+    // called `generate_body`, which calls `parse_and_validate(&req, schema, cache_hash)` with this
+    // same `cache_hash`. Since that cache is keyed purely on `cache_hash` (see its `convert`
+    // attribute), the call below is guaranteed a cache hit, not a fresh parse — this load-bearing
+    // invariant is why `splice_ftv1_trace` doesn't need to handle a populate-on-miss cost itself.
+    let bytes = match ftv1_req {
+        Some(ftv1_req) if status_code == StatusCode::OK => {
+            splice_ftv1_trace(bytes, &ftv1_req, &schema, cache_hash)
+        }
+        _ => bytes,
     };
 
     let mut resp = Response::new(Full::new(bytes).map_err(|never| match never {}).boxed());
@@ -162,6 +190,184 @@ fn add_headers(
     headers.insert("Content-Type", HeaderValue::from_static("application/json"));
 }
 
+/// Rebuilds the operation's trace and splices it into the response's `extensions.ftv1` field.
+///
+/// The document comes from the `parse_and_validate` cache and the node tree from
+/// `cached_trace_shape`, so a cache hit only pays for pruning, encoding, and re-serializing. On any
+/// failure the original bytes are returned unchanged so a trace can never break an otherwise-valid
+/// response.
+fn splice_ftv1_trace(
+    bytes: Bytes,
+    req: &GraphQLRequest,
+    schema: &FederatedSchema,
+    cache_hash: u64,
+) -> Bytes {
+    let Ok(doc) = parse_and_validate(req, schema, cache_hash) else {
+        return bytes;
+    };
+    let Some(op) = primary_operation(&doc) else {
+        return bytes;
+    };
+
+    let value: Value = match serde_json::from_slice(bytes.as_ref()) {
+        Ok(value) => value,
+        Err(err) => {
+            error!(%err, "unable to parse response for ftv1 splicing");
+            return bytes;
+        }
+    };
+
+    // Cloned out before `value` is borrowed mutably below: `prune_to_response` needs a read-only
+    // view of the actual generated data, independent of the `&mut` we take to splice `extensions`
+    // in afterward.
+    let data = value.get("data").cloned().unwrap_or(Value::Null);
+
+    let mut value = value;
+    let Some(response) = value.as_object_mut() else {
+        return bytes;
+    };
+
+    let (shape, duration_ns) = cached_trace_shape(op, &doc, cache_hash);
+    let mut trace = ftv1::Trace::from_shape(shape, duration_ns);
+    // Errors before pruning: a field error drops its target key from `data` too (see
+    // `generate_response`'s `to_drop`), so pruning first would remove the node before an error could
+    // attach to it. `prune_to_response` spares error-carrying nodes for this reason.
+    if let Some(errors) = response.get("errors").and_then(Value::as_array) {
+        populate_trace_errors(&mut trace, errors);
+    }
+    if let Some(root) = trace.root.as_mut() {
+        prune_to_response(root, &[&data]);
+    }
+    let encoded = ftv1::encode_trace(&trace);
+
+    let extensions = response
+        .entry("extensions")
+        .or_insert_with(|| Value::Object(Map::new()));
+    if let Some(extensions) = extensions.as_object_mut() {
+        extensions.insert("ftv1", Value::String(encoded.into()));
+    }
+
+    match serde_json::to_vec(&value) {
+        Ok(spliced) => spliced.into(),
+        Err(err) => {
+            error!(%err, "unable to re-serialize response with ftv1 trace");
+            bytes
+        }
+    }
+}
+
+/// Populates `trace`'s error nodes from the response body's already-serialized `errors[]`, so the
+/// trace and response agree on errors by construction. Mirrors Apollo Server's rule: a path-less
+/// error (a whole-request failure) attaches to the root; a path-bearing error attaches to the
+/// `root.child` with the matching `response_name`, falling back to root if the path doesn't resolve.
+fn populate_trace_errors(trace: &mut ftv1::Trace, errors: &[Value]) {
+    let Some(root) = trace.root.as_mut() else {
+        return;
+    };
+
+    for error in errors {
+        let message = error
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let json = serde_json::to_string(error).unwrap_or_default();
+
+        let response_name = error
+            .get("path")
+            .and_then(Value::as_array)
+            .and_then(|path| path.first())
+            .and_then(Value::as_str);
+
+        let child_index = response_name.and_then(|name| {
+            root.child
+                .iter()
+                .position(|child| child.response_name == name)
+        });
+
+        let target = match child_index {
+            Some(index) => &mut root.child[index],
+            None => &mut *root,
+        };
+
+        target.error.push(ftv1::Error {
+            message,
+            location: Vec::new(),
+            time_ns: 0,
+            json,
+        });
+    }
+}
+
+/// Prunes `node`'s subtree to the response keys actually present in `data`, dropping fields whose
+/// interface/union fragment condition didn't match the concrete type apollo-smith resolved.
+/// `ftv1::collect_fields` (used to build the cached shape) is type-condition-blind, so it can include
+/// every fragment branch in the query; this walks the tree against the real response afterward and
+/// drops whatever isn't there.
+///
+/// Kept separate from `cached_trace_shape` rather than folded into `TraceBuilder`: the shape is a
+/// pure function of the query/schema and safe to cache unconditionally, but which fragment branch was
+/// taken is random, per-request data — baking it into the cached tree would leak one request's
+/// resolved types into every other request sharing its `cache_hash`.
+///
+/// Concrete (non-abstract) fields are unaffected, since apollo-smith always inserts every field it
+/// resolves, nulls included — presence alone distinguishes "wrong fragment branch" from "legitimately
+/// null". Must run after `populate_trace_errors`: a field error drops its target from `data` too, so
+/// a node already carrying an error is kept regardless of what `data` says.
+fn prune_to_response(node: &mut ftv1::Node, data: &[&Value]) {
+    node.child
+        .retain(|child| !child.error.is_empty() || field_present(data, &child.response_name));
+
+    for child in &mut node.child {
+        let child_data = child_values(data, &child.response_name);
+        prune_to_response(child, &child_data);
+    }
+}
+
+/// Whether `key` appears in at least one object among `data`. Empty `data` (an empty list, `null`,
+/// or a scalar) means there's nothing to check against, so this returns `true` (keep, don't prune) —
+/// the existing "no info" approximation, not a guess that the field is wrong.
+fn field_present(data: &[&Value], key: &str) -> bool {
+    let mut saw_object = false;
+    for value in data {
+        if let Some(object) = value.as_object() {
+            saw_object = true;
+            if object.contains_key(key) {
+                return true;
+            }
+        }
+    }
+
+    !saw_object
+}
+
+/// Collects `key`'s value out of every object in `data`, flattening one level of array so a list
+/// field's elements (merged into one child set by `ftv1::TraceBuilder`) feed the next level's
+/// presence check together.
+fn child_values<'a>(data: &[&'a Value], key: &str) -> Vec<&'a Value> {
+    let mut out = Vec::new();
+    for value in data {
+        let Some(child) = value.as_object().and_then(|object| object.get(key)) else {
+            continue;
+        };
+        match child.as_array() {
+            Some(items) => out.extend(items.iter()),
+            None => out.push(child),
+        }
+    }
+
+    out
+}
+
+/// The operation a request executes: the first operation defined in the document.
+///
+/// Both response generation (`generate_body`) and FTV1 trace generation (`splice_ftv1_trace`) call
+/// this, so they're guaranteed to agree on which operation ran rather than merely computing the same
+/// thing independently.
+fn primary_operation(doc: &ExecutableDocument) -> Option<&Node<Operation>> {
+    doc.operations.iter().next()
+}
+
 #[cached(result = true, key = "u64", convert = "{_cache_hash}")]
 fn parse_and_validate(
     req: &GraphQLRequest,
@@ -171,6 +377,26 @@ fn parse_and_validate(
     let op_name = req.operation_name.as_deref().unwrap_or("unknown");
 
     ExecutableDocument::parse_and_validate(schema, &req.query, op_name)
+}
+
+/// Builds (or reuses) the FTV1 node tree for an operation, keyed on the same `cache_hash` as the
+/// response bytes and the parsed document.
+///
+/// Unlike the response bytes, this is safe to cache unconditionally — whether or not
+/// `cache_responses` is enabled. `Trace::build_shape` reads only `op`/`doc`, which are already
+/// captured by `cache_hash`, and never touches RNG state or generated response content, so the same
+/// `cache_hash` always produces the same shape. What varies per request — errors, and the wall-clock
+/// window from `Trace::from_shape` — is applied by the caller afterward, outside this cache.
+///
+/// Same memory caveat as `parse_and_validate`/`into_response_bytes_and_status_code`: entries are
+/// never invalidated, so hot-reloading the schema/config repeatedly will grow this cache over time.
+#[cached(key = "u64", convert = "{_cache_hash}")]
+fn cached_trace_shape(
+    op: &Node<Operation>,
+    doc: &ExecutableDocument,
+    _cache_hash: u64,
+) -> (ftv1::Node, u64) {
+    ftv1::Trace::build_shape(op, doc)
 }
 
 #[tracing::instrument(skip(req, schema, rng))]
@@ -207,7 +433,7 @@ async fn generate_body(
         }
     };
 
-    let op = doc.operations.iter().next().unwrap();
+    let op = primary_operation(&doc).unwrap();
     let op_name = op.name.as_ref().map(|name| name.as_str());
 
     debug!(
@@ -269,7 +495,13 @@ fn generate_response(
     if let Some((numerator, denominator)) = cfg.graphql_errors.request_error_ratio
         && rng.random_ratio(numerator, denominator)
     {
-        return Ok(json!({ "data": null, "errors": [{ "message": "Request error simulated" }]}));
+        return Ok(json!({
+            "data": null,
+            "errors": [{
+                "message": "Request error simulated",
+                "extensions": { "code": "INTERNAL_SERVER_ERROR" },
+            }],
+        }));
     }
 
     // Short-circuit introspection responses if a request is *only* introspection. This does mean that requests
@@ -330,7 +562,8 @@ fn generate_response(
             .map(|key| {
                 json!({
                     "message": "Field error simulated",
-                    "path": [key]
+                    "path": [key],
+                    "extensions": { "code": "INTERNAL_SERVER_ERROR" },
                 })
             })
             .collect();
@@ -377,6 +610,8 @@ pub struct ResponseGenerationConfig {
     pub http_error_ratio: Option<Ratio>,
     #[serde(default)]
     pub graphql_errors: GraphQLErrorConfig,
+    #[serde(default)]
+    pub ftv1: Option<bool>,
 }
 
 impl ResponseGenerationConfig {
@@ -398,6 +633,7 @@ impl Default for ResponseGenerationConfig {
             header_ratio: BTreeMap::new(),
             graphql_errors: GraphQLErrorConfig::default(),
             http_error_ratio: None,
+            ftv1: None,
         }
     }
 }
@@ -616,6 +852,49 @@ mod tests {
 
         let sdl = schema_obj.get("sdl").unwrap().as_str().unwrap();
         assert_eq!(supergraph, sdl);
+
+        Ok(())
+    }
+
+    #[test]
+    fn cached_trace_shape_reuses_cache_hash_regardless_of_document() -> anyhow::Result<()> {
+        let supergraph = include_str!("../../tests/data/schema.graphql");
+        let schema = FederatedSchema::parse_string(supergraph, "../../tests/data/schema.graphql")?;
+
+        let doc_a =
+            ExecutableDocument::parse_and_validate(&schema, r#"{ posts { title } }"#, "a.graphql")
+                .unwrap();
+        let doc_b = ExecutableDocument::parse_and_validate(
+            &schema,
+            r#"{ posts { title views } }"#,
+            "b.graphql",
+        )
+        .unwrap();
+        let op_a = primary_operation(&doc_a).unwrap();
+        let op_b = primary_operation(&doc_b).unwrap();
+
+        // A cache_hash value no other test/request could plausibly compute (real ones come from
+        // hashing a query/config/schema), so this test can't collide with `cached_trace_shape`'s
+        // process-global cache.
+        const CACHE_HASH: u64 = 0x6f6c645f73686170;
+
+        let (shape_a, _) = cached_trace_shape(op_a, &doc_a, CACHE_HASH);
+        // Same cache_hash, a document that would build a different shape (`title` *and* `views`
+        // instead of just `title`) if this weren't cached.
+        let (shape_b, _) = cached_trace_shape(op_b, &doc_b, CACHE_HASH);
+
+        assert_eq!(
+            shape_a, shape_b,
+            "same cache_hash should reuse the first-built shape rather than rebuilding from doc_b"
+        );
+        assert_eq!(shape_b.child.len(), 1);
+        let posts = &shape_b.child[0];
+        assert_eq!(
+            posts.child.len(),
+            1,
+            "shape should still reflect doc_a's `{{ posts {{ title }} }}`, not doc_b's extra `views`"
+        );
+        assert_eq!(posts.child[0].response_name, "title");
 
         Ok(())
     }

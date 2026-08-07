@@ -1,0 +1,21 @@
+name: Subgraph mock router integration validation
+description: |
+  This test plan checks that the subgraph mock integrates with the router
+  and the correct subgraph traces reach the mock-studio endpoint
+
+variables:
+  router_image: "ghcr.io/apollographql/router"
+  router_tag: "v2.13.1"
+
+  graphql_url: http://router:4000
+  mock_studio_url: http://mock-studio:1234
+
+scenario:
+  from:
+    kind: local
+    relative_path: scenario.yaml
+
+environment:
+  from:
+    kind: local
+    relative_path: environment.yaml
