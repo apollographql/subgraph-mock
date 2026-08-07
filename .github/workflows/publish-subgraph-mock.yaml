@@ -14,7 +14,7 @@ env:
 
 jobs:
   publish-subgraph-mock-image:
-    uses: apollographql/release-tooling/.github/workflows/build_and_publish.yml@cc8018036a3df0bfb7dd8b5d92ff23c998a59579
+    uses: apollographql/release-tooling/.github/workflows/build_and_publish.yml@5578f93e8a85bab43f372d520bc2ed6b8945d7e3
     permissions:
       contents: read
       packages: write
@@ -23,8 +23,8 @@ jobs:
     with:
       context: "."
       dockerfile_location: "./Dockerfile"
-      image_description: 'An image that allows us to mock subgraphs for testing purposes'
-      image_name: 'subgraph-mock'
+      image_description: "An image that allows us to mock subgraphs for testing purposes"
+      image_name: "subgraph-mock"
       platforms: '[{"platform":"linux/amd64","runner":"ubuntu-24.04"},{"platform":"linux/arm64","runner":"ubuntu-24.04-arm"}]'
     secrets: inherit
 
@@ -44,7 +44,7 @@ jobs:
         run: |
           printf '{"subgraph_image": "%s"}\n' "$SUBGRAPH_IMAGE" > rtf-vars.json
 
-      - uses: apollographql/release-tooling/rtf-orchestrator-run@94ecd82357269606853d52e94c3cebf78f29abf4
+      - uses: apollographql/release-tooling/rtf-orchestrator-run@5578f93e8a85bab43f372d520bc2ed6b8945d7e3
         with:
           test_plan_path: test-plans/router-integration/test-plan.yaml
           vars_file: rtf-vars.json
