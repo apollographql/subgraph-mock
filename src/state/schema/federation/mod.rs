@@ -1,4 +1,3 @@
-use anyhow::anyhow;
 use apollo_compiler::{
     Name, Node, Schema,
     ast::{
@@ -10,6 +9,8 @@ use apollo_compiler::{
     schema::{Component, ComponentName, ComponentOrigin, ExtendedType, ObjectType, UnionType},
 };
 use tracing::warn;
+
+use crate::state::SchemaError;
 
 mod definitions;
 
@@ -96,7 +97,10 @@ pub fn patch_ast(ast: &mut Document) -> FederationType {
 ///
 /// The directive definitions are copied from here:
 ///   https://github.com/apollographql/router/blob/23e580e22a4401cc2e7a952b241a1ec955b29c99/apollo-federation/src/api_schema.rs#L156https://github.com/apollographql/router/blob/23e580e22a4401cc2e7a952b241a1ec955b29c99/apollo-federation/src/api_schema.rs#L156
-pub fn patch_schema(schema: &mut Schema, federation_type: FederationType) -> anyhow::Result<()> {
+pub fn patch_schema(
+    schema: &mut Schema,
+    federation_type: FederationType,
+) -> Result<(), SchemaError> {
     // Resolve federated object types for the _Entity union.
     let members: IndexSet<ComponentName> = schema
         .types
@@ -160,13 +164,13 @@ pub fn patch_schema(schema: &mut Schema, federation_type: FederationType) -> any
             .schema_definition
             .query
             .as_ref()
-            .ok_or_else(|| anyhow!("Schema does not define a query type"))?
+            .ok_or(SchemaError::MissingQueryType)?
     };
 
     // Inject _entities query if appropriate and the _service query
     let query_root = match schema.types.get_mut(query_type_name).unwrap() {
         ExtendedType::Object(obj) => obj,
-        _ => return Err(anyhow!("query root is not an object")),
+        _ => return Err(SchemaError::QueryRootNotObject),
     };
 
     if has_federated_members {

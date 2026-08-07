@@ -1,3 +1,4 @@
+use error::{Result, ServerError};
 use handle::handle_request;
 use hyper::service::service_fn;
 use hyper_util::{
@@ -5,10 +6,11 @@ use hyper_util::{
     server::conn::auto::Builder,
 };
 use state::{Config, RngSource, State, default_port};
-use std::{fs, net::SocketAddr, path::PathBuf, sync::Arc};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 use tokio::net::TcpListener;
 use tracing::{error, info};
 
+pub mod error;
 pub mod ftv1;
 pub mod handle;
 pub mod latency;
@@ -29,11 +31,11 @@ pub struct Args {
 
 impl Args {
     /// Load and initialise the configuration based on command line args
-    pub fn init(self) -> anyhow::Result<(u16, State)> {
+    pub fn init(self) -> Result<(u16, State)> {
         let (port, seed, config) = match self.config {
             Some(path) => {
                 info!(path=%path.display(), "loading and parsing config file");
-                Config::parse_yaml(serde_yaml::from_slice(&fs::read(path)?)?)?
+                Config::from_file(&path)?
             }
             None => {
                 info!("using default config");
@@ -47,13 +49,18 @@ impl Args {
 }
 
 /// Run the server loop with the provided [State]
-pub async fn mock_server_loop(port: u16, state: State) -> anyhow::Result<()> {
-    let listener = TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], port))).await?;
+pub async fn mock_server_loop(port: u16, state: State) -> Result<()> {
+    let listener = TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], port)))
+        .await
+        .map_err(|source| ServerError::Bind { source })?;
     info!(%port, "subgraph mock server now listening");
 
     let state = Arc::new(state);
     loop {
-        let (stream, _) = listener.accept().await?;
+        let (stream, _) = listener
+            .accept()
+            .await
+            .map_err(|source| ServerError::Accept { source })?;
         let io = TokioIo::new(stream);
 
         let state = state.clone();

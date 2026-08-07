@@ -1,8 +1,8 @@
 use crate::{
+    error::{Error, Result},
     handle::graphql::ResponseGenerationConfig,
     latency::{LatencyConfig, LatencyGenerator},
 };
-use anyhow::Error;
 use apollo_configuration::{ParseYamlOptions, configuration};
 use hyper::{
     HeaderMap,
@@ -10,7 +10,7 @@ use hyper::{
 };
 use serde_json_bytes::serde_json;
 use serde_yaml::Value;
-use std::collections::HashMap;
+use std::{collections::HashMap, fs, path::Path};
 use tracing::{info, warn};
 
 /// Allowed in the YAML, but not represented in the [BaseConfig] struct as we
@@ -44,7 +44,7 @@ fn default_cache_responses() -> bool {
 impl BaseConfig {
     pub fn into_parts(
         self,
-    ) -> anyhow::Result<(
+    ) -> Result<(
         u16,
         bool,
         LatencyGenerator,
@@ -55,7 +55,7 @@ impl BaseConfig {
         let latency_generator = LatencyGenerator::new(self.latency);
 
         info!(headers=%serde_json::to_string(&self.headers).unwrap(), "additional headers");
-        let additional_headers: anyhow::Result<HeaderMap<HeaderValue>> = self
+        let additional_headers: Result<HeaderMap<HeaderValue>> = self
             .headers
             .into_iter()
             .map(|(k, v)| Ok((HeaderName::try_from(&k)?, HeaderValue::try_from(&v)?)))
@@ -106,11 +106,17 @@ impl Default for Config {
 }
 
 impl Config {
+    /// Reads and parses a YAML config file into a resolved port, RNG seed, and [Config]
+    pub fn from_file(path: &Path) -> Result<(u16, Option<u64>, Config)> {
+        let bytes = fs::read(path)?;
+        let value = serde_yaml::from_slice(&bytes)?;
+
+        Self::parse_yaml(value)
+    }
+
     /// Parses a YAML file into a resolved port, RNG seed, and [Config]
-    pub fn parse_yaml(mut base: Value) -> anyhow::Result<(u16, Option<u64>, Config)> {
-        let mapping = base
-            .as_mapping_mut()
-            .ok_or_else(|| Error::msg("config file must be a mapping"))?;
+    pub fn parse_yaml(mut base: Value) -> Result<(u16, Option<u64>, Config)> {
+        let mapping = base.as_mapping_mut().ok_or(Error::NotAMapping)?;
 
         let mut subgraph_cache_responses = HashMap::new();
         let mut subgraph_headers = HashMap::new();
@@ -122,10 +128,13 @@ impl Config {
                 Value::Mapping(mapping) => {
                     for (subgraph_name, subgraph_override) in mapping {
                         let mut subgraph_config = base.clone();
+                        let subgraph_name: String = serde_yaml::from_value(subgraph_name)?;
 
-                        let override_mapping = subgraph_override
-                            .as_mapping()
-                            .ok_or_else(|| Error::msg("subgraph override must be a mapping"))?;
+                        let override_mapping = subgraph_override.as_mapping().ok_or_else(|| {
+                            Error::OverrideNotAMapping {
+                                subgraph: subgraph_name.clone(),
+                            }
+                        })?;
 
                         if override_mapping.contains_key("port") {
                             warn!("port overrides for subgraphs will be ignored")
@@ -141,7 +150,6 @@ impl Config {
                             &subgraph_config_text,
                             &ParseYamlOptions::default(),
                         )?;
-                        let subgraph_name: String = serde_yaml::from_value(subgraph_name)?;
 
                         info!("generating customized config for {}", subgraph_name);
                         let (
@@ -160,7 +168,7 @@ impl Config {
                             .insert(subgraph_name, response_generation);
                     }
                 }
-                _ => return Err(Error::msg("config file must be a mapping")),
+                _ => return Err(Error::NotAMapping),
             }
         }
 

@@ -1,3 +1,4 @@
+use crate::error::Result;
 use notify::{Config as NotifyConfig, Event, EventKind, PollWatcher, RecursiveMode, Watcher};
 use std::{path::PathBuf, sync::Arc, time::Duration};
 use tokio::sync::RwLock;
@@ -10,7 +11,7 @@ mod schema;
 pub use config::Config;
 pub use config::default_port;
 pub use rng::RngSource;
-pub use schema::FederatedSchema;
+pub use schema::{FederatedSchema, SchemaError};
 
 use schema::update_schema;
 
@@ -23,7 +24,7 @@ pub struct State {
 }
 
 impl State {
-    pub fn new(config: Config, schema_path: PathBuf) -> anyhow::Result<Self> {
+    pub fn new(config: Config, schema_path: PathBuf) -> Result<Self> {
         let schema = FederatedSchema::parse(&schema_path)?;
         let schema = Arc::new(RwLock::new(schema));
 
@@ -31,7 +32,7 @@ impl State {
         // We have to use a PollWatcher because Docker on MacOS doesn't support filesystem events:
         // https://docs.rs/notify/8.2.0/notify/index.html#docker-with-linux-on-macos-m1
         let mut schema_watcher = PollWatcher::new(
-            move |res: Result<Event, _>| match res {
+            move |res: std::result::Result<Event, _>| match res {
                 Ok(event) => {
                     if let EventKind::Modify(_) = event.kind
                         && let Some(path) = event.paths.first()
@@ -47,8 +48,11 @@ impl State {
             NotifyConfig::default()
                 .with_poll_interval(Duration::from_secs(1))
                 .with_compare_contents(true),
-        )?;
-        schema_watcher.watch(&schema_path, RecursiveMode::NonRecursive)?;
+        )
+        .map_err(SchemaError::from)?;
+        schema_watcher
+            .watch(&schema_path, RecursiveMode::NonRecursive)
+            .map_err(SchemaError::from)?;
 
         Ok(Self {
             config: Arc::new(RwLock::new(config)),
@@ -58,7 +62,7 @@ impl State {
         })
     }
 
-    pub fn default(schema_path: PathBuf) -> anyhow::Result<Self> {
+    pub fn default(schema_path: PathBuf) -> Result<Self> {
         Self::new(Config::default(), schema_path)
     }
 
