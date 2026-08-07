@@ -1,14 +1,14 @@
 use crate::{
     ftv1,
-    handle::ByteResponse,
+    handle::{ByteResponse, error::HandlerError},
     state::{Config, FederatedSchema, State},
 };
-use anyhow::anyhow;
 use apollo_compiler::{
     ExecutableDocument, Name, Node,
     ast::OperationType,
     executable::{Field, Operation},
-    request::coerce_variable_values,
+    parser::SourceMap,
+    request::{RequestError, coerce_variable_values},
     response::JsonMap,
     validation::{Valid, WithErrors},
 };
@@ -46,19 +46,16 @@ pub async fn handle(
     subgraph_name: Option<&str>,
     state: Arc<State>,
     should_emit_ftv1: bool,
-) -> anyhow::Result<ByteResponse> {
+) -> ByteResponse {
     let req: GraphQLRequest = match serde_json::from_slice(&body_bytes) {
         Ok(req) => req,
-        Err(err) => {
-            error!(%err, "received invalid graphql request");
-            let mut resp = Response::new(
-                Full::new(err.to_string().into_bytes().into())
-                    .map_err(|never| match never {})
-                    .boxed(),
-            );
-            *resp.status_mut() = StatusCode::BAD_REQUEST;
+        Err(source) => {
+            error!(%source, "received invalid graphql request");
+            let (bytes, status) = HandlerError::InvalidJson { source }.to_response();
+            let mut resp = Response::new(Full::new(bytes).map_err(|never| match never {}).boxed());
+            *resp.status_mut() = status;
 
-            return Ok(resp);
+            return resp;
         }
     };
 
@@ -95,10 +92,11 @@ pub async fn handle(
     if let Some(Ratio(numerator, denominator)) = rgen_cfg.http_error_ratio
         && rng.random_ratio(numerator, denominator)
     {
-        return Response::builder()
-            .status(rng.random_range(500..=504))
-            .body(Empty::new().map_err(|never| match never {}).boxed())
-            .map_err(|err| err.into());
+        let mut resp = Response::new(Empty::new().map_err(|never| match never {}).boxed());
+        *resp.status_mut() = StatusCode::from_u16(rng.random_range(500..=504))
+            .expect("500..=504 is always a valid HTTP status code");
+
+        return resp;
     }
 
     let cache_enabled = subgraph_name
@@ -134,7 +132,7 @@ pub async fn handle(
     let headers = resp.headers_mut();
     add_headers(&config, rgen_cfg, subgraph_name, headers, &mut rng);
 
-    Ok(resp)
+    resp
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -427,11 +425,15 @@ async fn generate_body(
     let doc = match parse_and_validate(&req, schema, cache_hash) {
         Ok(doc) => doc,
         Err(err) => {
-            let errs: Vec<_> = err.errors.iter().map(|d| d.to_json()).collect();
-            error!(?errs, query=%req.query, "invalid graphql query");
-            let bytes = serde_json::to_vec(&json!({ "data": Value::Null, "errors": errs }))
-                .unwrap_or_default();
-            return (bytes.into(), StatusCode::BAD_REQUEST);
+            let errors: Vec<_> = err.errors.iter().map(|d| d.to_json()).collect();
+            error!(?errors, query=%req.query, "invalid graphql query");
+            let message = errors
+                .first()
+                .map(|error| error.message.clone())
+                .unwrap_or_else(|| "invalid graphql query".to_string());
+            let errors = serde_json::to_value(&errors).unwrap_or_default();
+
+            return HandlerError::InvalidQuery { message, errors }.to_response();
         }
     };
 
@@ -451,10 +453,7 @@ async fn generate_body(
                 Ok(resp) => resp,
                 Err(err) => {
                     error!(%err, "unable to generate response");
-                    return (
-                        Bytes::from("unable to generate response"),
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                    );
+                    return err.to_response();
                 }
             }
         }
@@ -462,22 +461,32 @@ async fn generate_body(
         // Not currently supporting mutations or subscriptions
         op_type => {
             error!("received {op_type} request: not implemented");
-            return (
-                Bytes::from("not implemented"),
-                StatusCode::INTERNAL_SERVER_ERROR,
-            );
+            return HandlerError::NotImplemented {
+                operation_type: op_type.to_string(),
+            }
+            .to_response();
         }
     };
 
     match serde_json::to_vec(&resp) {
         Ok(bytes) => (bytes.into(), StatusCode::OK),
-        Err(err) => {
-            error!(%err, "unable to serialize response");
-            (
-                Bytes::from(err.to_string().into_bytes()),
-                StatusCode::INTERNAL_SERVER_ERROR,
-            )
+        Err(source) => {
+            error!(%source, "unable to serialize response");
+            HandlerError::SerializationFailed { source }.to_response()
         }
+    }
+}
+
+/// Converts an `apollo_compiler` [request error](https://spec.graphql.org/draft/#sec-Errors.Request-errors)
+/// — reported identically by `coerce_variable_values` and `partial_execute` — into a
+/// [`HandlerError::RequestError`]. `to_graphql_error` already resolves the error's `SourceSpan`
+/// into a line/column via `sources`, so `locations` needs no further work here.
+fn request_error(err: &RequestError, sources: &SourceMap) -> HandlerError {
+    let graphql_err = err.to_graphql_error(sources);
+
+    HandlerError::RequestError {
+        message: graphql_err.message,
+        locations: serde_json::to_value(&graphql_err.locations).unwrap_or_default(),
     }
 }
 
@@ -488,7 +497,7 @@ fn generate_response(
     schema: &FederatedSchema,
     variables: &JsonMap,
     rng: &mut StdRng,
-) -> anyhow::Result<Value> {
+) -> Result<Value, HandlerError> {
     let op = match doc.operations.get(op_name) {
         Ok(op) => op,
         Err(_) => return Ok(json!({ "data": null })),
@@ -512,16 +521,20 @@ fn generate_response(
     // data being requested, but if we want to make this fully spec-compliant in the future we will need to merge
     // the result of `partial_execute` with the random data generated on every query (which would be costlier).
     if op.is_introspection(doc) {
-        return apollo_compiler::introspection::partial_execute(
+        let variable_values = coerce_variable_values(schema, op, variables)
+            .map_err(|err| request_error(&err, &doc.sources))?;
+
+        let result = apollo_compiler::introspection::partial_execute(
             schema,
             &schema.implementers_map(),
             doc,
             op,
-            &coerce_variable_values(schema, op, variables)
-                .map_err(|err| anyhow!("{}", err.message()))?,
+            &variable_values,
         )
-        .map_err(|err| anyhow!("{}", err.message()))
-        .and_then(|result| serde_json_bytes::to_value(result).map_err(|err| anyhow!("{}", err)));
+        .map_err(|err| request_error(&err, &doc.sources))?;
+
+        return serde_json_bytes::to_value(result)
+            .map_err(|source| HandlerError::SerializationFailed { source });
     }
 
     let mut rng_provider = RandProvider(StdRng::from_rng(&mut *rng));
@@ -545,7 +558,7 @@ fn generate_response(
 
     builder = builder.with_operation_name(op_name);
 
-    let data = builder.build_data().map_err(|err| anyhow!("{}", err))?;
+    let data = builder.build_data()?;
 
     // Select a random number of top-level fields to "fail" if we are going to have field errors. For the sake of
     // simplicity and performance, we won't traverse deeper into the response object.

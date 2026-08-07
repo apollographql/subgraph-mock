@@ -8,12 +8,13 @@ use std::{error::Error, sync::Arc};
 use tokio::time::{Instant, sleep};
 use tracing::{trace, warn};
 
+pub mod error;
 pub mod graphql;
 
 pub type ByteResponse = Response<BoxBody<Bytes, hyper::Error>>;
 
 /// Top level handler function that is called for every incoming request from Hyper.
-pub async fn handle_request<B>(req: Request<B>, state: Arc<State>) -> anyhow::Result<ByteResponse>
+pub async fn handle_request<B>(req: Request<B>, state: Arc<State>) -> Result<ByteResponse, B::Error>
 where
     B: Body,
     B::Error: Error + Send + Sync + 'static,
@@ -78,18 +79,15 @@ where
             );
             *resp.status_mut() = StatusCode::NOT_FOUND;
 
-            (Ok(resp), None)
+            (resp, None)
         }
     };
 
-    // Skip latency injection when we have a non-2xx response
-    if res.is_ok() {
-        let latency = generator_override
-            .unwrap_or_else(|| &config.latency_generator)
-            .generate(Instant::now());
-        trace!(latency_ms = latency.as_millis(), "injecting latency");
-        sleep(latency).await;
-    }
+    let latency = generator_override
+        .unwrap_or_else(|| &config.latency_generator)
+        .generate(Instant::now());
+    trace!(latency_ms = latency.as_millis(), "injecting latency");
+    sleep(latency).await;
 
-    res
+    Ok(res)
 }

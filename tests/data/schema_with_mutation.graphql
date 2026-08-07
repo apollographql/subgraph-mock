@@ -1,0 +1,18 @@
+# A minimal schema defining a `Mutation` root
+schema {
+  query: Query
+  mutation: Mutation
+}
+
+type Query {
+  posts: [Post!]!
+}
+
+type Mutation {
+  createPost(title: String!): Post!
+}
+
+type Post {
+  id: ID!
+  title: String!
+}
