@@ -91,6 +91,112 @@ response_generation:
       min_len: 1
       max_len: 10
 
+# OpenTelemetry traces and metrics for the HTTP server. Omit `telemetry` entirely (the default)
+# and it's fully disabled: no spans, no metrics, no propagation overhead -- not just "no
+# exporter", genuinely off. Mentioning `otel:`/`http:` at all below, even as `{}`, turns each on
+# independently -- and once turned on, everything inside is used exactly as written; nothing is
+# smuggled in for sub-fields you don't set (see the propagator note below for why that matters).
+# Like "port" and "seed", this is a global setting: it cannot be overridden per-subgraph.
+telemetry:
+  otel:
+    # Uncomment to turn telemetry back off without deleting the rest of this section:
+    # disabled: true
+
+    # Resource attributes identify *this* process's data once it reaches your backend --
+    # without them you can't tell one subgraph-mock instance's spans from another's.
+    # service.name/service.version are set for you programmatically; everything else here
+    # (e.g. which environment this is) is yours to add.
+    resource:
+      attributes:
+        - name: deployment.environment
+          value: staging
+
+    # Forward to an OTel Collector. HTTP shown here (simplest to reason about -- plain HTTP
+    # POST, no TLS/gRPC setup); swap the exporter key to `otlp_grpc` for gRPC (default port
+    # 4317) if your collector prefers that. `batch` buffers and exports periodically -- the
+    # right choice once you're not just eyeballing stdout.
+    tracer_provider:
+      processors:
+        - batch:
+            exporter:
+              otlp_http:
+                endpoint: http://localhost:4318
+                # Uncomment if your collector requires auth:
+                # headers:
+                #   - name: authorization
+                #     value: "Bearer <token>"
+
+      # always_on (the default) samples every span -- fine at mock-server scale, but if
+      # you're load-testing subgraph-mock itself, sampling down keeps you from flooding
+      # your own collector:
+      # sampler:
+      #   trace_id_ratio_based:
+      #     ratio: 0.1
+
+    meter_provider:
+      readers:
+        - periodic:
+            exporter:
+              otlp_http:
+                endpoint: http://localhost:4318
+            interval: 60000
+
+      # Views customize how an instrument's measurements are aggregated - see the view
+      # specification (https://opentelemetry.io/docs/specs/otel/metrics/sdk/#view) for the full
+      # shape (renaming, attribute filtering, dropping an instrument entirely, etc). The one case
+      # worth calling out here: http.server.request.duration (and http.client.request.duration)
+      # are recorded in *seconds*, but if no view sets its histogram's bucket boundaries, it falls
+      # back to the OTel SDK's generic default boundaries -
+      # 0,5,10,25,50,75,100,250,500,750,1000,2500,5000,7500,10000 - which are calibrated for
+      # millisecond-scale values, not seconds. Real request latency (usually single- or
+      # low-double-digit ms) never clears the first real boundary (5 whole seconds), so every
+      # observation collapses into the same (0,5] bucket and histogram_quantile can only linearly
+      # interpolate across that one 5-second-wide bucket - producing a constant, meaningless
+      # ~95%/99% of 5000ms (e.g. 4750ms/4950ms) instead of anything reflecting real behavior. Set
+      # explicit, seconds-scaled boundaries to fix it - shown below is the OTel semantic
+      # convention's recommended set for this exact instrument:
+      # https://opentelemetry.io/docs/specs/semconv/http/http-metrics/#metric-httpserverrequestduration
+      views:
+        - selector:
+            instrument_name: http.server.request.duration
+            instrument_type: histogram
+          stream:
+            aggregation:
+              explicit_bucket_histogram:
+                boundaries:
+                  [0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10]
+                record_min_max: true
+
+    # Context propagation: extracts an incoming router `traceparent` header so subgraph-mock's
+    # spans parent correctly under the router's trace. Defaults to `[]` (nothing extracted)
+    # upstream, and -- unlike the fields above -- subgraph-mock does *not* default this to
+    # `[tracecontext]` for you just because otel is on: `OpenTelemetryConfig`'s fields aren't
+    # something subgraph-mock can reach into to apply a sub-field default, only whether the
+    # whole `otel:`/`http:` section is present at all. So this line is load-bearing, not
+    # decorative -- omit it and you get real spans that are all disconnected roots.
+    #
+    # CAUTION: only tracecontext/baggage/xray are actually implemented -- b3, b3multi, jaeger,
+    # and ottrace are accepted by the schema but panic at startup if selected.
+    propagator:
+      composite: [tracecontext]
+
+    # For quick local debugging instead of standing up a collector, swap the two `otlp_http`
+    # exporters above for:
+    #   console: {}
+    # (prints one JSON line per span/metric batch to stdout)
+
+  http:
+    # Both default to false upstream. subgraph-mock's entire job is generating response
+    # payloads, so this is worth turning on explicitly, unlike for most HTTP servers.
+    spans:
+      request_body_size: true
+      response_body_size: true
+    metrics:
+      request_body_size: true
+      response_body_size: true
+    # See apollo-http-server-telemetry's docs for more opt-ins (header capture, url.query,
+    # peer/local network address) if you want deeper spans than this.
+
 # Any value except the listening port in the configuration can be
 # overridden at a per-subgraph level. Subgraphs do not map 1:1 with
 # running servers so the port must remain a shared configuration.

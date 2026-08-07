@@ -9,6 +9,7 @@ mod rng;
 mod schema;
 
 pub use config::Config;
+pub use config::TelemetryConfig;
 pub use config::default_port;
 pub use rng::RngSource;
 pub use schema::{FederatedSchema, SchemaError};

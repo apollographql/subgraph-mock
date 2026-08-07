@@ -399,7 +399,7 @@ fn cached_trace_shape(
     ftv1::Trace::build_shape(op, doc)
 }
 
-#[tracing::instrument(skip(req, schema, rng))]
+#[apollo_opentelemetry::traced]
 #[cached(key = "u64", convert = "{cache_hash}")]
 async fn into_response_bytes_and_status_code(
     cfg: &ResponseGenerationConfig,
@@ -411,7 +411,7 @@ async fn into_response_bytes_and_status_code(
     generate_body(cfg, req, schema, cache_hash, rng).await
 }
 
-#[tracing::instrument(skip(req, schema, rng))]
+#[apollo_opentelemetry::traced]
 async fn generate_body(
     cfg: &ResponseGenerationConfig,
     req: GraphQLRequest,
