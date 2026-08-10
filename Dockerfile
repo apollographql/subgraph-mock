@@ -1,4 +1,4 @@
-FROM --platform=$BUILDPLATFORM rust:1.96.0 AS build
+FROM --platform=$BUILDPLATFORM rust:1.97.1 AS build
 
 # create a new empty shell project
 RUN USER=root cargo new --bin subgraph-mock
@@ -18,7 +18,7 @@ COPY ./src ./src
 RUN cargo build --release
 
 
-FROM --platform=$BUILDPLATFORM debian:bookworm-slim
+FROM --platform=$BUILDPLATFORM debian:trixie-slim
 
 COPY --from=build /subgraph-mock/target/release/subgraph-mock .
 
