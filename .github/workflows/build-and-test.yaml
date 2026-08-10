@@ -19,12 +19,27 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       rust-version: ${{ steps.get-version.outputs.rust-version }}
+      cargo-deny-version: ${{ steps.get-cargo-deny-version.outputs.cargo-deny-version }}
+      typos-version: ${{ steps.get-typos-version.outputs.typos-version }}
+      dprint-version: ${{ steps.get-dprint-version.outputs.dprint-version }}
     steps:
       - uses: actions/checkout@v4
       - id: get-version
         run: |
           version=$(grep '^rust\s*=' .config/mise/mise.toml | sed -E 's/.*"([^"]+)".*/\1/')
           echo "rust-version=$version" >> "$GITHUB_OUTPUT"
+      - id: get-cargo-deny-version
+        run: |
+          version=$(grep '"cargo:cargo-deny"' .config/mise/mise.toml | sed -E 's/.*= "([^"]+)"/\1/')
+          echo "cargo-deny-version=$version" >> "$GITHUB_OUTPUT"
+      - id: get-typos-version
+        run: |
+          version=$(grep '"cargo:typos-cli"' .config/mise/mise.toml | sed -E 's/.*= "([^"]+)"/\1/')
+          echo "typos-version=$version" >> "$GITHUB_OUTPUT"
+      - id: get-dprint-version
+        run: |
+          version=$(grep '"cargo:dprint"' .config/mise/mise.toml | sed -E 's/.*= "([^"]+)"/\1/')
+          echo "dprint-version=$version" >> "$GITHUB_OUTPUT"
 
   check-for-updated-rust-files:
     name: Check whether rust files have been updated
@@ -96,18 +111,42 @@ jobs:
         rust-version: nightly
     - run: RUSTDOCFLAGS="-D warnings -D rustdoc::broken-intra-doc-links" cargo doc --all-features --workspace --no-deps
   
+  cargo-deny:
+    name: Check licenses, advisories, bans and sources with cargo-deny
+    runs-on: ubuntu-latest
+    needs: [read-rust-version]
+    steps:
+    - uses: actions/checkout@v4
+      # The marketplace action can't be pinned to the version in mise.toml, so
+      # install the binary directly instead, same as we do for dprint below
+    - run: rm -f .config/mise/mise.toml
+    - uses: jdx/mise-action@v2
+      with:
+        mise_toml: |
+          [tools]
+          "aqua:EmbarkStudios/cargo-deny" = "${{ needs.read-rust-version.outputs.cargo-deny-version }}"
+    - run: cargo-deny check
+
   spell-check:
     name: Spell check using the typos-cli crate
     runs-on: ubuntu-latest
+    needs: [read-rust-version]
     steps:
     - uses: actions/checkout@v4
-    - uses: crate-ci/typos@v1.34.0
+      # The marketplace action can't be pinned to the version in mise.toml, so
+      # install the binary directly instead, same as we do for dprint below
+    - run: rm -f .config/mise/mise.toml
+    - uses: jdx/mise-action@v2
       with:
-        config: ./.typos.toml
+        mise_toml: |
+          [tools]
+          "aqua:crate-ci/typos" = "${{ needs.read-rust-version.outputs.typos-version }}"
+    - run: typos --config ./.typos.toml
 
   lint-markdown:
     name: Lint Markdown files with dprint
     runs-on: ubuntu-latest
+    needs: [read-rust-version]
     steps:
     - uses: actions/checkout@v4
       # The action takes too long to build if we install all the tools in the repo
@@ -117,5 +156,5 @@ jobs:
       with:
         mise_toml: |
           [tools]
-          "dprint" = "0.48.0"
+          "dprint" = "${{ needs.read-rust-version.outputs.dprint-version }}"
     - run: dprint check
