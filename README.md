@@ -20,6 +20,13 @@ It does not support:
 - mutations
 - mixed queries with both introspection and concrete fields
 
+### Configuration files
+
+Any string value anywhere in the config file can reference an environment variable with
+`${env.VAR_NAME}`, optionally with a default for when it's unset: `${env.VAR_NAME:-fallback}`. A
+referenced variable with no default that's unset at parse time is an error. See
+`example-config.yaml` for a live example.
+
 ### Features
 
 This mock server is mainly designed to act as multiple subgraphs behind a federated supergraph. It

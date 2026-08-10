@@ -3,7 +3,7 @@ use crate::{
     handle::graphql::ResponseGenerationConfig,
     latency::{LatencyConfig, LatencyGenerator},
 };
-use apollo_configuration::{ParseYamlOptions, configuration};
+use apollo_configuration::{ParseYamlOptions, configuration, expansion::EnvVariables};
 use apollo_http_server_telemetry::HttpServerTelemetryConfig;
 use apollo_opentelemetry::OpenTelemetryConfig;
 use hyper::{
@@ -97,15 +97,18 @@ impl TelemetrySection {
 }
 
 fn disabled_open_telemetry() -> OpenTelemetryConfig {
-    apollo_configuration::parse_yaml("disabled: true\n", &ParseYamlOptions::default())
-        .expect("hand-written literal is valid YAML")
+    apollo_configuration::parse_yaml(
+        "disabled: true\n",
+        &ParseYamlOptions::default().variables(EnvVariables),
+    )
+    .expect("hand-written literal is valid YAML")
 }
 
 fn default_http_telemetry() -> HttpServerTelemetryConfig {
     apollo_configuration::parse_yaml(
         "spans:\n  request_body_size: true\n  response_body_size: true\n\
          metrics:\n  request_body_size: true\n  response_body_size: true\n",
-        &ParseYamlOptions::default(),
+        &ParseYamlOptions::default().variables(EnvVariables),
     )
     .expect("hand-written literal is valid YAML")
 }
@@ -193,7 +196,7 @@ impl Config {
                         let subgraph_config_text = serde_yaml::to_string(&subgraph_config)?;
                         let parsed_config: BaseConfig = apollo_configuration::parse_yaml(
                             &subgraph_config_text,
-                            &ParseYamlOptions::default(),
+                            &ParseYamlOptions::default().variables(EnvVariables),
                         )?;
 
                         info!("generating customized config for {}", subgraph_name);
@@ -219,8 +222,10 @@ impl Config {
         }
 
         let base_config_text = serde_yaml::to_string(&base)?;
-        let base_config: BaseConfig =
-            apollo_configuration::parse_yaml(&base_config_text, &ParseYamlOptions::default())?;
+        let base_config: BaseConfig = apollo_configuration::parse_yaml(
+            &base_config_text,
+            &ParseYamlOptions::default().variables(EnvVariables),
+        )?;
         let seed = base_config.seed;
         info!(seed = ?seed, "rng seed");
 

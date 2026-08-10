@@ -1,3 +1,7 @@
+# Any string value anywhere in this file can reference an environment variable:
+#   ${env.VAR_NAME}              errors at startup if VAR_NAME is unset
+#   ${env.VAR_NAME:-fallback}    uses "fallback" instead of erroring if VAR_NAME is unset
+
 # The port to listen on (currently the graphql endpoint is simply served on "/"
 # but support for serving different subgraphs at different routes is planned
 port: 8080
@@ -120,7 +124,10 @@ telemetry:
         - batch:
             exporter:
               otlp_http:
-                endpoint: http://localhost:4318
+                # ${env...} works here like anywhere else in the file (see the top of this
+                # file) - handy when the collector's address isn't known until the process
+                # starts (e.g. injected by a test harness), with a sane default for local use.
+                endpoint: "${env.OTEL_COLLECTOR_ENDPOINT:-http://localhost:4318}"
                 # Uncomment if your collector requires auth:
                 # headers:
                 #   - name: authorization
