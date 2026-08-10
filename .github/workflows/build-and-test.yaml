@@ -23,23 +23,23 @@ jobs:
       typos-version: ${{ steps.get-typos-version.outputs.typos-version }}
       dprint-version: ${{ steps.get-dprint-version.outputs.dprint-version }}
     steps:
-      - uses: actions/checkout@v4
-      - id: get-version
-        run: |
-          version=$(grep '^rust\s*=' .config/mise/mise.toml | sed -E 's/.*"([^"]+)".*/\1/')
-          echo "rust-version=$version" >> "$GITHUB_OUTPUT"
-      - id: get-cargo-deny-version
-        run: |
-          version=$(grep '"cargo:cargo-deny"' .config/mise/mise.toml | sed -E 's/.*= "([^"]+)"/\1/')
-          echo "cargo-deny-version=$version" >> "$GITHUB_OUTPUT"
-      - id: get-typos-version
-        run: |
-          version=$(grep '"cargo:typos-cli"' .config/mise/mise.toml | sed -E 's/.*= "([^"]+)"/\1/')
-          echo "typos-version=$version" >> "$GITHUB_OUTPUT"
-      - id: get-dprint-version
-        run: |
-          version=$(grep '"cargo:dprint"' .config/mise/mise.toml | sed -E 's/.*= "([^"]+)"/\1/')
-          echo "dprint-version=$version" >> "$GITHUB_OUTPUT"
+    - uses: actions/checkout@v4
+    - id: get-version
+      run: |
+        version=$(grep '^rust\s*=' .config/mise/mise.toml | sed -E 's/.*"([^"]+)".*/\1/')
+        echo "rust-version=$version" >> "$GITHUB_OUTPUT"
+    - id: get-cargo-deny-version
+      run: |
+        version=$(grep '"cargo:cargo-deny"' .config/mise/mise.toml | sed -E 's/.*= "([^"]+)"/\1/')
+        echo "cargo-deny-version=$version" >> "$GITHUB_OUTPUT"
+    - id: get-typos-version
+      run: |
+        version=$(grep '"cargo:typos-cli"' .config/mise/mise.toml | sed -E 's/.*= "([^"]+)"/\1/')
+        echo "typos-version=$version" >> "$GITHUB_OUTPUT"
+    - id: get-dprint-version
+      run: |
+        version=$(grep '"cargo:dprint"' .config/mise/mise.toml | sed -E 's/.*= "([^"]+)"/\1/')
+        echo "dprint-version=$version" >> "$GITHUB_OUTPUT"
 
   check-for-updated-rust-files:
     name: Check whether rust files have been updated
@@ -110,7 +110,7 @@ jobs:
       with:
         rust-version: nightly
     - run: RUSTDOCFLAGS="-D warnings -D rustdoc::broken-intra-doc-links" cargo doc --all-features --workspace --no-deps
-  
+
   cargo-deny:
     name: Check licenses, advisories, bans and sources with cargo-deny
     runs-on: ubuntu-latest
@@ -158,3 +158,18 @@ jobs:
           [tools]
           "dprint" = "${{ needs.read-rust-version.outputs.dprint-version }}"
     - run: dprint check
+
+  rtf-otel-verification:
+    name: Verify otel via RTF
+    needs: [read-rust-version, check-for-updated-rust-files]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+    - uses: actions/checkout@v4
+    - name: Build toolbox image
+      run: docker build -t local-subgraph-mock .
+    - uses: apollographql/release-tooling/rtf-run-test-plan@5578f93e8a85bab43f372d520bc2ed6b8945d7e3
+      with:
+        test_plan_path: test-plans/otel-verification/test-plan.yaml
