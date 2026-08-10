@@ -5,15 +5,51 @@ description: |
 
 variables:
   router_image: "ghcr.io/apollographql/router"
-  router_tag: "v2.13.1"
+  router_tag: "v2.17.0"
 
   graphql_url: http://router:4000
   mock_studio_url: http://mock-studio:1234
 
+  # Modest volume - enough concurrency to exercise the router's OTLP batch flush under
+  # load without turning this into a performance/capacity test.
+  duration: "30s"
+  warmup_duration: "10s"
+  rps: "10"
+
 scenario:
   from:
-    kind: local
-    relative_path: scenario.yaml
+    kind: github
+    org: apollographql
+    repo: rtf-morgue
+    ref: 1e438d30b558872d1264c6aa5f29ae5b7cc1e7d9
+    path: lib/scenario-config/orchestrator-k6-graphql/scenario.yaml
+
+  overrides:
+    variable_definitions:
+      - name: mock_studio_url
+        description: The URL for the mock-studio service
+
+    docker:
+      command: 'sh "$VERIFY_SCRIPT"'
+
+    file_providers:
+      - name: canned_ops.json
+        env_var: CANNED_OPS_FILE
+        kind: relative_path
+        path: data/canned-ops.json
+
+      - name: verify-ftv1.sh
+        env_var: VERIFY_SCRIPT
+        kind: relative_path
+        path: scripts/verify-ftv1.sh
+
+      - name: verify-ftv1.js
+        env_var: K6_TEST_ENTRY
+        kind: relative_path
+        path: scripts/verify-ftv1.js
+
+    env_vars:
+      MOCK_STUDIO_URL: "{{ mock_studio_url }}"
 
 environment:
   from:

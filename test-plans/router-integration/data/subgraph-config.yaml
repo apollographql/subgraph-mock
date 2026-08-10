@@ -18,3 +18,20 @@ response_generation:
       type: string
       min_len: 1
       max_len: 10
+
+# Forwards subgraph-mock's own OTel HTTP metrics (http.server.request.duration,
+# http.server.active_requests, etc.) to an OTel Collector. RTF_OTEL_COLLECTOR_GRPC is only
+# injected by the RTF Orchestrator (see data/docker-compose.yaml's subgraph service - the
+# rtf.io/otel label is what triggers this), so this is a no-op under plain `rtf run`: the
+# default falls back to a localhost address nothing is listening on, and an unreachable
+# collector doesn't crash subgraph-mock (confirmed by hand - it stays up and keeps serving
+# through failed export attempts, same expectation as the router's own equivalent config in
+# rtf-morgue's orchestrator-router environment).
+telemetry:
+  otel:
+    meter_provider:
+      readers:
+        - periodic:
+            exporter:
+              otlp_grpc:
+                endpoint: "${env.RTF_OTEL_COLLECTOR_GRPC:-http://localhost:4317}"

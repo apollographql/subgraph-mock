@@ -1,15 +1,19 @@
 name: Subgraph mock router integration
 description: |
-  Orchestrator-compatible docker compose environment for router testing.
+  Docker compose environment for router/subgraph-mock integration testing.
 
   This environment runs:
   - Router with the specified version
-  - Mock subgraphs behind nginx loadbalancer
-  - Mock Studio for usage reporting
+  - subgraph-mock, serving the whole supergraph
+  - Mock Studio, standing in for GraphOS ingest (FTV1/usage-reporting - see the router's own
+    experimental_otlp_endpoint in data/router-config.yaml, unrelated to the OTel Collector
+    metrics path below)
 
-  Logs for all services are collected and the router forwards OTEL metrics to the rtf otel collector
-
-  OTEL labels are created for the ROUTER_TAG (version), GRAPH_REF and TEST_NAME
+  Logs for all services are collected. subgraph-mock's `rtf.io/otel: true` label
+  (data/docker-compose.yaml) makes its own OTel HTTP metrics reach the RTF Orchestrator's OTel
+  Collector, and from there Prometheus (see output_collection below) - but only when this test
+  plan runs via `rtf rep ci-run`; it's a no-op under plain `rtf run` (see
+  data/subgraph-config.yaml's telemetry.otel section for why).
 
 variable_definitions:
   - name: router_image
@@ -58,3 +62,14 @@ env_vars:
 
   # Subgraph configuration
   SUBGRAPH_IMAGE: "{{ subgraph_image }}"
+
+# Observational only (no threshold/expect field exists in this mechanism reports whether
+# subgraph-mock's OTel metrics actually made it through the collector to Prometheus. Only
+# produces data under `rtf rep ci-run`; under plain `rtf run` there's no Orchestrator-managed
+# Prometheus for this to query at all.
+output_collection:
+  prometheus:
+    - name: subgraph-request-rate
+      step: 15s
+      query: |
+        sum(rate(http_server_request_duration_seconds_count{k8s_pod_name=~"subgraph.*"}[1m]))

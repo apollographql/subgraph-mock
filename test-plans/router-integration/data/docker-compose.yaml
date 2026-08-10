@@ -56,6 +56,7 @@ services:
     labels:
       rtf.io/file-providers: true
       rtf.io/log-collection: true
+      rtf.io/otel: true
     container_name: subgraph-mock
     command:
       - --schema
