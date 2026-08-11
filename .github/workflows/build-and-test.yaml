@@ -170,6 +170,6 @@ jobs:
     - uses: actions/checkout@v4
     - name: Build toolbox image
       run: docker build -t local-subgraph-mock .
-    - uses: apollographql/release-tooling/rtf-run-test-plan@5578f93e8a85bab43f372d520bc2ed6b8945d7e3
+    - uses: apollographql/release-tooling/rtf-run-test-plan@90ea46d97dbe616eae7e2e77ce286537af1b3dac
       with:
         test_plan_path: test-plans/otel-verification/test-plan.yaml
