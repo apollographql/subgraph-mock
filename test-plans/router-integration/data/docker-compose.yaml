@@ -22,23 +22,6 @@ services:
       -s ${SUPERGRAPH_SCHEMA} -c ${ROUTER_CONFIG} --hot-reload --license ${LICENSE_FILE:-/dev/null}
     restart: unless-stopped
 
-  # The router image does not have curl or wget installed so we cannot run a health check on it directly
-  # This side car uses the curl image to query the health endpoint of the router and set its own health status
-  # We can then infer the health of the router from the health of this side car.
-  router-healthcheck:
-    image: curlimages/curl:latest
-    container_name: router-healthcheck
-    depends_on:
-      - router
-    # This keeps the container alive so it can run the health checks
-    command: ["tail", "-f", "/dev/null"]
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fs http://router:4000/health | grep -q UP"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 5s
-
   mock-studio:
     container_name: mock-studio
     image: us-central1-docker.pkg.dev/platform-cross-environment/apollo-private-docker/mock-studio:edge

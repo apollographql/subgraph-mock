@@ -9,25 +9,33 @@ variables:
 
   graphql_url: http://router:4000
   mock_studio_url: http://mock-studio:1234
+  # subgraph-mock's own combined health endpoint (not proxied by the router - see
+  # data/docker-compose.yaml's subgraph-healthcheck sidecar), checked directly by the k6
+  # scenario, in the same container network, before load generation begins.
+  subgraph_health_url: http://subgraph:8080/health
 
   # Modest volume - enough concurrency to exercise the router's OTLP batch flush under
   # load without turning this into a performance/capacity test.
   duration: "30s"
   warmup_duration: "10s"
   rps: "10"
+  health_check_url: "http://router:4000/health"
 
 scenario:
   from:
     kind: github
     org: apollographql
     repo: rtf-morgue
-    ref: 1e438d30b558872d1264c6aa5f29ae5b7cc1e7d9
+    ref: 057d1c4fcf4cd143af38aaed0dba01d3155396f7
     path: lib/scenario-config/orchestrator-k6-graphql/scenario.yaml
 
   overrides:
     variable_definitions:
       - name: mock_studio_url
         description: The URL for the mock-studio service
+
+      - name: subgraph_health_url
+        description: subgraph-mock's combined health endpoint URL, checked directly by the k6 scenario
 
     docker:
       command: 'sh "$VERIFY_SCRIPT"'
@@ -50,6 +58,7 @@ scenario:
 
     env_vars:
       MOCK_STUDIO_URL: "{{ mock_studio_url }}"
+      SUBGRAPH_HEALTH_URL: "{{ subgraph_health_url }}"
 
 environment:
   from:
