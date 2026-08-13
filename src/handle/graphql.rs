@@ -13,6 +13,7 @@ use apollo_compiler::{
     validation::{Valid, WithErrors},
 };
 use apollo_configuration::{Validate, configuration};
+use apollo_opentelemetry::metrics::HistogramExt;
 use apollo_smith::{
     BooleanGenerator, FloatGenerator, Generator, Generators, IntGenerator, RandProvider,
     RandomProvider, ResponseBuilder, ResponseError, StringGenerator,
@@ -25,6 +26,7 @@ use hyper::{
     header::{HeaderName, HeaderValue},
 };
 use indexmap::IndexMap;
+use opentelemetry::{KeyValue, metrics::Histogram};
 use ordered_float::OrderedFloat;
 use rand::{RngExt, SeedableRng, rngs::StdRng, seq::IteratorRandom};
 use schemars::JsonSchema;
@@ -104,9 +106,27 @@ pub async fn handle(
         .unwrap_or_else(|| config.cache_responses);
 
     let (bytes, status_code) = if cache_enabled {
-        into_response_bytes_and_status_code(rgen_cfg, req, &schema, cache_hash, &mut rng).await
+        into_response_bytes_and_status_code(
+            rgen_cfg,
+            req,
+            &schema,
+            cache_hash,
+            &mut rng,
+            subgraph_name,
+            &state.response_generation_duration,
+        )
+        .await
     } else {
-        generate_body(rgen_cfg, req, &schema, cache_hash, &mut rng).await
+        generate_body(
+            rgen_cfg,
+            req,
+            &schema,
+            cache_hash,
+            &mut rng,
+            subgraph_name,
+            &state.response_generation_duration,
+        )
+        .await
     };
 
     // FTV1 traces are spliced in here, off the cached hot path, so cached bytes stay byte-for-byte
@@ -407,8 +427,10 @@ async fn into_response_bytes_and_status_code(
     schema: &FederatedSchema,
     cache_hash: u64,
     rng: &mut StdRng,
+    subgraph_name: Option<&str>,
+    histogram: &Histogram<f64>,
 ) -> (Bytes, StatusCode) {
-    generate_body(cfg, req, schema, cache_hash, rng).await
+    generate_body(cfg, req, schema, cache_hash, rng, subgraph_name, histogram).await
 }
 
 #[apollo_opentelemetry::traced]
@@ -418,7 +440,18 @@ async fn generate_body(
     schema: &FederatedSchema,
     cache_hash: u64,
     rng: &mut StdRng,
+    subgraph_name: Option<&str>,
+    histogram: &Histogram<f64>,
 ) -> (Bytes, StatusCode) {
+    // Guard records elapsed time on drop (any return path, or if this future is cancelled
+    // mid-poll), so it must live for the whole function — hence the leading underscore rather
+    // than being dropped explicitly.
+    let mut attrs = Vec::new();
+    if let Some(name) = subgraph_name {
+        attrs.push(KeyValue::new("subgraph.name", name.to_string()));
+    }
+    let _duration = histogram.record_duration_on_drop(attrs);
+
     debug!(%cache_hash, req.operation_name, "handling graphql request");
     trace!(variables=?req.variables, "request variables");
 

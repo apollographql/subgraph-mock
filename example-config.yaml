@@ -174,6 +174,22 @@ telemetry:
                   [0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10]
                 record_min_max: true
 
+        # Same problem as above, but worse: subgraph_mock.response_generation.duration times just
+        # the response-building work (parsing, validating, generating fields) with the HTTP layer,
+        # injected latency, and cache hits excluded, so it's typically sub-millisecond to a few ms
+        # -- an order of magnitude below http.server.request.duration. The default boundaries would
+        # collapse it into the first (0,5] bucket even more thoroughly, so it needs its own,
+        # finer-grained view rather than reusing the one above.
+        - selector:
+            instrument_name: subgraph_mock.response_generation.duration
+            instrument_type: histogram
+          stream:
+            aggregation:
+              explicit_bucket_histogram:
+                boundaries:
+                  [0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1]
+                record_min_max: true
+
     # Context propagation: extracts an incoming router `traceparent` header so subgraph-mock's
     # spans parent correctly under the router's trace. Defaults to `[]` (nothing extracted)
     # upstream, and -- unlike the fields above -- subgraph-mock does *not* default this to

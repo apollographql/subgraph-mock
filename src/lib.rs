@@ -99,7 +99,10 @@ pub async fn mock_server_loop(
         .map_err(|source| ServerError::Bind { source })?;
     info!(%port, "subgraph mock server now listening");
 
-    let state = Arc::new(state);
+    // Rebuilds the response-generation-duration histogram against the meter provider installed
+    // by `Telemetry::builder(...).build()` in `main`, which runs after `state` was constructed.
+    // See `State::with_response_generation_duration` for why this can't just happen in `State::new`.
+    let state = Arc::new(state.with_response_generation_duration());
     let telemetry_stack = ServiceBuilder::new()
         .http_server_propagation()
         .http_server_telemetry(http_telemetry_config);

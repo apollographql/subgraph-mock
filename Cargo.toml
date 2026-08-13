@@ -53,5 +53,6 @@ tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }
 apollo-parser = "0.8.5"
 arbitrary = "1.4.2"
 futures = "0.3.31"
+opentelemetry_sdk = { version = "0.32", features = ["testing"] }
 pretty_assertions = "1.4"
 tokio = { workspace = true , features = ["test-util"] }

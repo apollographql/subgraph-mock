@@ -1,5 +1,7 @@
 use crate::error::Result;
+use apollo_opentelemetry::default_instrumentation_scope;
 use notify::{Config as NotifyConfig, Event, EventKind, PollWatcher, RecursiveMode, Watcher};
+use opentelemetry::metrics::Histogram;
 use std::{path::PathBuf, sync::Arc, time::Duration};
 use tokio::sync::RwLock;
 use tracing::error;
@@ -20,6 +22,8 @@ pub struct State {
     pub config: Arc<RwLock<Config>>,
     pub schema: Arc<RwLock<FederatedSchema>>,
     pub rng: RngSource,
+    /// Time spent generating a response body
+    pub response_generation_duration: Histogram<f64>,
     /// Handle to the pollwatcher that updates the schema for this config, so that it only drops out of scope when this state does
     _schema_watcher: PollWatcher,
 }
@@ -59,6 +63,7 @@ impl State {
             config: Arc::new(RwLock::new(config)),
             schema,
             rng: RngSource::default(),
+            response_generation_duration: response_generation_duration_histogram(),
             _schema_watcher: schema_watcher,
         })
     }
@@ -70,5 +75,88 @@ impl State {
     pub fn with_rng(mut self, rng: RngSource) -> Self {
         self.rng = rng;
         self
+    }
+
+    /// Rebuilds [response_generation_duration](State::response_generation_duration) from
+    /// whichever [MeterProvider](opentelemetry::metrics::MeterProvider) is globally installed at
+    /// the time this is called.
+    pub fn with_response_generation_duration(mut self) -> Self {
+        self.response_generation_duration = response_generation_duration_histogram();
+
+        self
+    }
+}
+
+/// Builds the `subgraph_mock.response_generation.duration` histogram from the currently
+/// installed global meter provider.
+fn response_generation_duration_histogram() -> Histogram<f64> {
+    opentelemetry::global::meter_with_scope(default_instrumentation_scope!().clone())
+        .f64_histogram("subgraph_mock.response_generation.duration")
+        .with_description(
+            "Time spent generating a subgraph mock response body: parsing, validating, and \
+             building it. Excludes cache hits and injected latency.",
+        )
+        .with_unit("s")
+        .build()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use opentelemetry::global;
+    use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData};
+    use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
+
+    /// Proves the exact hazard [State::with_response_generation_duration]'s docs warn about: a
+    /// histogram obtained from the global meter provider stays bound to whichever provider was
+    /// active *at that moment*, so building it before the real provider is installed leaves it a
+    /// permanent no-op — refreshing it after the fact is what actually fixes that, not merely
+    /// installing the provider sooner.
+    ///
+    /// This test mutates the process-global meter provider. That's safe today because no other
+    /// test in this binary (`subgraph_mock`'s unit tests) touches it, but it would race with one
+    /// that did, since `cargo test` runs unit tests in parallel within one process.
+    #[test]
+    fn refreshing_after_provider_install_is_required_to_record() {
+        // Mirrors `State::new` running before `main.rs` calls `Telemetry::builder(...).build()`:
+        // only the SDK's no-op provider is installed when this histogram is built.
+        let stale = response_generation_duration_histogram();
+
+        // Mirrors `Telemetry::builder(...).build()` installing the real provider afterward.
+        let exporter = InMemoryMetricExporter::default();
+        let provider = SdkMeterProvider::builder()
+            .with_reader(PeriodicReader::builder(exporter.clone()).build())
+            .build();
+        global::set_meter_provider(provider.clone());
+
+        // The already-built histogram doesn't pick up the new provider...
+        stale.record(1.0, &[]);
+        // ...only a histogram built via `with_response_generation_duration` (i.e. built again,
+        // now that the real provider is installed) does.
+        let fresh = response_generation_duration_histogram();
+        fresh.record(2.0, &[]);
+
+        provider.force_flush().expect("flush should succeed");
+        let finished = exporter
+            .get_finished_metrics()
+            .expect("export should succeed");
+
+        let total_count: u64 = finished
+            .iter()
+            .flat_map(|rm| rm.scope_metrics())
+            .flat_map(|sm| sm.metrics())
+            .filter(|m| m.name() == "subgraph_mock.response_generation.duration")
+            .filter_map(|m| match m.data() {
+                AggregatedMetrics::F64(MetricData::Histogram(histogram)) => Some(histogram),
+                _ => None,
+            })
+            .flat_map(|histogram| histogram.data_points())
+            .map(|data_point| data_point.count())
+            .sum();
+
+        assert_eq!(
+            total_count, 1,
+            "only the histogram built after the provider was installed should have recorded"
+        );
     }
 }
