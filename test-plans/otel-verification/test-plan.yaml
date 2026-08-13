@@ -1,9 +1,11 @@
 name: Subgraph mock OTel telemetry verification
 description: |
-  Verifies subgraph-mock's OTel HTTP telemetry end to end without a live OTel Collector and
-  without the remote orchestrator: telemetry.otel/telemetry.http are turned on with the console
-  exporter, and the scenario itself (a Script, not a Docker one) reads subgraph-mock's captured
-  stdout directly via `docker logs` to verify it, all in a single local `rtf run`. See README.md.
+  Verifies subgraph-mock's OTel telemetry end to end without a live OTel Collector and without
+  the remote orchestrator: telemetry.otel/telemetry.http are turned on with the console exporter,
+  and the scenario itself (a Script, not a Docker one) reads subgraph-mock's captured stdout
+  directly via `docker logs` to verify it -- both the HTTP-layer spans/metrics and
+  subgraph-mock's own response-generation/cache metrics -- all in a single local `rtf run`. See
+  README.md.
 
 variables:
   subgraph_image: "local-subgraph-mock"

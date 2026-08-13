@@ -68,4 +68,26 @@ grep -q 'http.server.request.body.size' "$log_file" \
 grep -q 'http.server.response.body.size' "$log_file" \
   || fail "no http.server.response.body.size metric found -- check telemetry.http defaults"
 
+# Both requests above use the same query/route, so they share one cache_hash: the first is a
+# cache miss (nothing generated yet, so it's the one that pays for and records
+# response_generation.duration below) and the second -- cache_responses defaults to true -- is a
+# hit. Checking for both outcomes (not just that the metric exists at all) is what actually proves
+# the cache is doing something, not just that the instrument is wired up.
+grep -q 'subgraph_mock.response_generation.duration' "$log_file" \
+  || fail "no subgraph_mock.response_generation.duration metric found"
+grep -q 'subgraph_mock.response_cache.lookups' "$log_file" \
+  || fail "no subgraph_mock.response_cache.lookups metric found"
+grep -q '"cache.result"' "$log_file" \
+  || fail "no subgraph_mock.response_cache.lookups data point carries a cache.result attribute"
+grep -q '"stringValue":"miss"' "$log_file" \
+  || fail "no cache.result=miss data point found -- expected the first (uncached) request to record one"
+grep -q '"stringValue":"hit"' "$log_file" \
+  || fail "no cache.result=hit data point found -- expected the second (same cache_hash) request to record one"
+
+# Sampled on a 30s background poll (see State::with_cache_metrics), not per-request, but its first
+# tick fires immediately on startup -- well before this script gets anywhere near stopping the
+# container -- so a data point should already exist by the time shutdown flushes it below.
+grep -q 'subgraph_mock.cache.size' "$log_file" \
+  || fail "no subgraph_mock.cache.size metric found"
+
 echo "OK: subgraph-mock's captured log contains the expected spans and metrics"

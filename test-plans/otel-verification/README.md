@@ -1,8 +1,9 @@
 # otel-verification
 
-Verifies subgraph-mock's OTel HTTP telemetry actually gets recorded correctly - propagation, span
-nesting, `subgraph.name` enrichment, and the body-size metrics - without a live OTel Collector, and
-fully locally (will not run via the orchestrator).
+Verifies subgraph-mock's OTel telemetry actually gets recorded correctly - propagation, span
+nesting, `subgraph.name` enrichment, the HTTP-layer body-size metrics, and subgraph-mock's own
+response-generation/cache metrics - without a live OTel Collector, and fully locally (will not run
+via the orchestrator).
 
 subgraph-mock's `telemetry.otel` is configured with the `console` exporter, so telemetry data is
 written directly to the container's stdout instead of exported over the network. The scenario
