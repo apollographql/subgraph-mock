@@ -1,10 +1,16 @@
 use crate::error::Result;
 use apollo_opentelemetry::default_instrumentation_scope;
+use apollo_opentelemetry::metrics::{GaugeExt, PollGuard};
 use notify::{Config as NotifyConfig, Event, EventKind, PollWatcher, RecursiveMode, Watcher};
-use opentelemetry::metrics::Histogram;
+use opentelemetry::KeyValue;
+use opentelemetry::global::meter_with_scope;
+use opentelemetry::metrics::{Counter, Histogram, Meter};
 use std::{path::PathBuf, sync::Arc, time::Duration};
 use tokio::sync::RwLock;
 use tracing::error;
+
+/// How often the `subgraph_mock.cache.size` gauge samples the internal caches' entry counts.
+const CACHE_SIZE_POLL_INTERVAL: Duration = Duration::from_secs(30);
 
 mod config;
 mod rng;
@@ -24,6 +30,11 @@ pub struct State {
     pub rng: RngSource,
     /// Time spent generating a response body
     pub response_generation_duration: Histogram<f64>,
+    /// Count of `into_response_bytes_and_status_code` cache lookups
+    pub response_cache_lookups: Counter<u64>,
+    /// Keeps the [GaugeExt::poll] background task that samples cache entry counts into
+    /// `subgraph_mock.cache.size` alive for as long as this `State` is
+    _cache_size_poll_guard: Option<PollGuard>,
     /// Handle to the pollwatcher that updates the schema for this config, so that it only drops out of scope when this state does
     _schema_watcher: PollWatcher,
 }
@@ -64,6 +75,8 @@ impl State {
             schema,
             rng: RngSource::default(),
             response_generation_duration: response_generation_duration_histogram(),
+            response_cache_lookups: response_cache_lookups_counter(),
+            _cache_size_poll_guard: None,
             _schema_watcher: schema_watcher,
         })
     }
@@ -85,18 +98,57 @@ impl State {
 
         self
     }
+
+    /// Rebuilds [response_cache_lookups](State::response_cache_lookups) and (re)starts the
+    /// `subgraph_mock.cache.size` poller against whichever meter provider is currently installed
+    pub fn with_cache_metrics(mut self) -> Self {
+        self.response_cache_lookups = response_cache_lookups_counter();
+
+        let gauge = meter()
+            .i64_gauge("subgraph_mock.cache.size")
+            .with_description(
+                "Current entry count of subgraph-mock's internal caches, tagged by `cache` name. \
+                 None of them evict, so steady growth over a run's lifetime signals unbounded \
+                 memory use rather than expected cache reuse.",
+            )
+            .build();
+        self._cache_size_poll_guard = Some(gauge.poll(CACHE_SIZE_POLL_INTERVAL, |observer| {
+            for (cache, size) in crate::handle::graphql::cache_sizes() {
+                observer.observe(size, &[KeyValue::new("cache", cache)]);
+            }
+        }));
+
+        self
+    }
+}
+
+fn meter() -> Meter {
+    meter_with_scope(default_instrumentation_scope!().clone())
 }
 
 /// Builds the `subgraph_mock.response_generation.duration` histogram from the currently
 /// installed global meter provider.
 fn response_generation_duration_histogram() -> Histogram<f64> {
-    opentelemetry::global::meter_with_scope(default_instrumentation_scope!().clone())
+    meter()
         .f64_histogram("subgraph_mock.response_generation.duration")
         .with_description(
             "Time spent generating a subgraph mock response body: parsing, validating, and \
              building it. Excludes cache hits and injected latency.",
         )
         .with_unit("s")
+        .build()
+}
+
+/// Builds the `subgraph_mock.response_cache.lookups` counter from the currently installed
+/// global meter provider.
+fn response_cache_lookups_counter() -> Counter<u64> {
+    meter()
+        .u64_counter("subgraph_mock.response_cache.lookups")
+        .with_description(
+            "Count of response-cache lookups (hit vs. miss) for `cache_responses`-enabled \
+             subgraphs. A miss means a lookup actually paid the response-generation cost \
+             recorded by subgraph_mock.response_generation.duration; a hit means it didn't.",
+        )
         .build()
 }
 
