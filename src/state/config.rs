@@ -2,6 +2,7 @@ use crate::{
     error::{Error, Result},
     handle::graphql::ResponseGenerationConfig,
     latency::{LatencyConfig, LatencyGenerator},
+    state::health::HealthConfig,
 };
 use apollo_configuration::{ParseYamlOptions, configuration, expansion::EnvVariables};
 use apollo_http_server_telemetry::HttpServerTelemetryConfig;
@@ -19,6 +20,16 @@ use tracing::{info, warn};
 /// neither want nor need that data structure to be recursive.
 const SUBGRAPH_OVERRIDES_KEY: &str = "subgraph_overrides";
 
+type BaseConfigParts = (
+    u16,
+    bool,
+    LatencyGenerator,
+    HeaderMap<HeaderValue>,
+    ResponseGenerationConfig,
+    HealthConfig,
+    TelemetryConfig,
+);
+
 #[configuration]
 struct BaseConfig {
     #[config(default = default_port())]
@@ -34,6 +45,11 @@ struct BaseConfig {
     #[config(default = default_cache_responses())]
     pub cache_responses: bool,
     pub telemetry: TelemetrySection,
+    /// Single combined health endpoint (collapsing liveness/readiness/startup into one
+    /// path, like the router's own health_check - see data/router-config.yaml). Global
+    /// only: setting this in a subgraph override has no effect, since there is only one
+    /// process to probe.
+    pub health: HealthConfig,
 }
 
 pub fn default_port() -> u16 {
@@ -45,16 +61,7 @@ fn default_cache_responses() -> bool {
 }
 
 impl BaseConfig {
-    pub fn into_parts(
-        self,
-    ) -> Result<(
-        u16,
-        bool,
-        LatencyGenerator,
-        HeaderMap<HeaderValue>,
-        ResponseGenerationConfig,
-        TelemetryConfig,
-    )> {
+    pub fn into_parts(self) -> Result<BaseConfigParts> {
         info!(config=%serde_json::to_string(&self.latency).unwrap(), "latency generation");
         let latency_generator = LatencyGenerator::new(self.latency);
 
@@ -76,6 +83,7 @@ impl BaseConfig {
             latency_generator,
             additional_headers?,
             response_generation,
+            self.health,
             self.telemetry.resolve(),
         ))
     }
@@ -126,6 +134,9 @@ pub struct Config {
     pub response_generation: ResponseGenerationConfig,
     pub cache_responses: bool,
     pub subgraph_overrides: SubgraphOverrides,
+    /// Global only: there is no per-subgraph equivalent, since there is only one
+    /// process (and one health endpoint) to report on.
+    pub health: HealthConfig,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -144,6 +155,7 @@ impl Default for Config {
             response_generation: Default::default(),
             cache_responses: default_cache_responses(),
             subgraph_overrides: Default::default(),
+            health: Default::default(),
         }
     }
 }
@@ -192,6 +204,10 @@ impl Config {
                             warn!("telemetry overrides for subgraphs will be ignored")
                         }
 
+                        if override_mapping.contains_key("health") {
+                            warn!("health overrides for subgraphs will be ignored")
+                        }
+
                         merge_yaml(subgraph_override, &mut subgraph_config);
                         let subgraph_config_text = serde_yaml::to_string(&subgraph_config)?;
                         let parsed_config: BaseConfig = apollo_configuration::parse_yaml(
@@ -206,6 +222,7 @@ impl Config {
                             latency_generator,
                             headers,
                             response_generation,
+                            _health,
                             _telemetry_config,
                         ) = parsed_config.into_parts()?;
 
@@ -229,8 +246,15 @@ impl Config {
         let seed = base_config.seed;
         info!(seed = ?seed, "rng seed");
 
-        let (port, cache_responses, latency, headers, response_generation, telemetry_config) =
-            base_config.into_parts()?;
+        let (
+            port,
+            cache_responses,
+            latency,
+            headers,
+            response_generation,
+            health,
+            telemetry_config,
+        ) = base_config.into_parts()?;
 
         Ok((
             port,
@@ -246,6 +270,7 @@ impl Config {
                     response_generation: subgraph_response_generation_configs,
                     cache_responses: subgraph_cache_responses,
                 },
+                health,
             },
             telemetry_config,
         ))

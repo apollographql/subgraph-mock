@@ -6,7 +6,7 @@ use hyper::{
 };
 use std::sync::Arc;
 use tokio::time::{Instant, sleep};
-use tower::BoxError;
+use tower::{BoxError, Service};
 use tracing::{trace, warn};
 
 pub mod error;
@@ -17,10 +17,25 @@ pub type ByteResponse = Response<BoxBody<Bytes, hyper::Error>>;
 /// Top level handler function that is called for every incoming request from Hyper.
 pub async fn handle_request<B>(req: Request<B>, state: Arc<State>) -> Result<ByteResponse, B::Error>
 where
-    B: Body,
+    B: Body + Send + 'static,
     B::Error: Into<BoxError>,
 {
     let (parts, body) = req.into_parts();
+
+    if parts.method == Method::GET {
+        let response = state
+            .health_service
+            .clone()
+            .call(Request::from_parts(parts, body))
+            .await
+            .unwrap_or_else(|never| match never {});
+        let (parts, body) = response.into_parts();
+        return Ok(Response::from_parts(
+            parts,
+            body.map_err(|never| match never {}).boxed(),
+        ));
+    }
+
     let (method, path) = (parts.method, parts.uri.path());
     let include_ftv1 = parts
         .headers

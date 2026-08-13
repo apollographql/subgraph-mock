@@ -1,10 +1,15 @@
 use crate::error::Result;
-use apollo_opentelemetry::default_instrumentation_scope;
-use apollo_opentelemetry::metrics::{GaugeExt, PollGuard};
+use apollo_healthcheck::{HealthEndpoints, ReadinessSignal, StartupLatch};
+use apollo_opentelemetry::{
+    default_instrumentation_scope,
+    metrics::{GaugeExt, PollGuard},
+};
 use notify::{Config as NotifyConfig, Event, EventKind, PollWatcher, RecursiveMode, Watcher};
-use opentelemetry::KeyValue;
-use opentelemetry::global::meter_with_scope;
-use opentelemetry::metrics::{Counter, Histogram, Meter};
+use opentelemetry::{
+    KeyValue,
+    global::meter_with_scope,
+    metrics::{Counter, Histogram, Meter},
+};
 use std::{path::PathBuf, sync::Arc, time::Duration};
 use tokio::sync::RwLock;
 use tracing::error;
@@ -13,12 +18,14 @@ use tracing::error;
 const CACHE_SIZE_POLL_INTERVAL: Duration = Duration::from_secs(30);
 
 mod config;
+mod health;
 mod rng;
 mod schema;
 
 pub use config::Config;
 pub use config::TelemetryConfig;
 pub use config::default_port;
+pub use health::{HealthConfig, SingleHealthEndpoint};
 pub use rng::RngSource;
 pub use schema::{FederatedSchema, SchemaError};
 
@@ -28,6 +35,7 @@ pub struct State {
     pub config: Arc<RwLock<Config>>,
     pub schema: Arc<RwLock<FederatedSchema>>,
     pub rng: RngSource,
+    pub health_service: SingleHealthEndpoint,
     /// Time spent generating a response body
     pub response_generation_duration: Histogram<f64>,
     /// Count of `into_response_bytes_and_status_code` cache lookups
@@ -44,6 +52,17 @@ impl State {
         let schema = FederatedSchema::parse(&schema_path)?;
         let schema = Arc::new(RwLock::new(schema));
 
+        // Liveness has no indicator registered at all: subgraph-mock has no sub-process or
+        // deadlock-prone internals, so "the process is up"is the only meaningful liveness signal.
+        let (readiness_signal, readiness_indicator) = ReadinessSignal::pair("schema_reload");
+        let (startup_latch, startup_indicator) = StartupLatch::pair("state_init");
+        let health_endpoints = HealthEndpoints::builder(config.health.to_health_endpoints_config())
+            .readiness(readiness_indicator)
+            .startup(startup_indicator)
+            .build();
+        let health_service =
+            SingleHealthEndpoint::new(config.health.path.clone(), health_endpoints);
+
         let lock = schema.clone();
         // We have to use a PollWatcher because Docker on MacOS doesn't support filesystem events:
         // https://docs.rs/notify/8.2.0/notify/index.html#docker-with-linux-on-macos-m1
@@ -52,9 +71,14 @@ impl State {
                 Ok(event) => {
                     if let EventKind::Modify(_) = event.kind
                         && let Some(path) = event.paths.first()
-                        && let Err(err) = update_schema(path, lock.clone())
                     {
-                        error!("Failed to reload schema: {}", err);
+                        match update_schema(path, lock.clone()) {
+                            Ok(()) => readiness_signal.clear(),
+                            Err(err) => {
+                                readiness_signal.report_unhealthy(err.to_string());
+                                error!("Failed to reload schema: {}", err);
+                            }
+                        }
                     }
                 }
                 Err(errors) => {
@@ -70,6 +94,10 @@ impl State {
             .watch(&schema_path, RecursiveMode::NonRecursive)
             .map_err(SchemaError::from)?;
 
+        // Latch startup healthy only once the schema has parsed and the watcher is live —
+        // i.e. once State::new's initial schema + config load has actually completed.
+        startup_latch.mark_started();
+
         Ok(Self {
             config: Arc::new(RwLock::new(config)),
             schema,
@@ -77,6 +105,7 @@ impl State {
             response_generation_duration: response_generation_duration_histogram(),
             response_cache_lookups: response_cache_lookups_counter(),
             _cache_size_poll_guard: None,
+            health_service,
             _schema_watcher: schema_watcher,
         })
     }
