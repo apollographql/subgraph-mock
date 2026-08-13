@@ -69,6 +69,41 @@ Traces are approximate rather than exact reproductions of a real subgraph's timi
 None of these prevent the router from decoding, redacting, stitching, or reporting the trace — they
 only affect timing and field-usage fidelity for abstract-typed queries.
 
+#### OpenTelemetry
+
+This mock server can export OpenTelemetry traces and metrics. Both are disabled by default — see
+`example-config.yaml`'s `telemetry:` section for how to point them at a collector (or `console:` for
+local debugging) and turn on HTTP-layer spans/metrics. The metrics below exist as instruments
+regardless, but nothing is actually collected anywhere until `telemetry.otel` is configured with an
+enabled meter provider.
+
+**HTTP-layer metrics**
+
+Emitted for every request by `apollo-http-server-telemetry`, following the
+[OpenTelemetry HTTP semantic conventions](https://opentelemetry.io/docs/specs/semconv/http/http-metrics/).
+See that crate's own docs for the full attribute set attached to each.
+
+| Metric                           | Type          | Unit | Notes                                                                                            |
+| -------------------------------- | ------------- | ---- | ------------------------------------------------------------------------------------------------ |
+| `http.server.request.duration`   | Histogram     | `s`  | Always recorded.                                                                                 |
+| `http.server.active_requests`    | UpDownCounter | -    | Always recorded.                                                                                 |
+| `http.server.request.body.size`  | Histogram     | `By` | Opt-in via `telemetry.http.metrics.request_body_size` (on by default in `example-config.yaml`).  |
+| `http.server.response.body.size` | Histogram     | `By` | Opt-in via `telemetry.http.metrics.response_body_size` (on by default in `example-config.yaml`). |
+
+**subgraph-mock metrics**
+
+Emitted directly by this server:
+
+| Metric                                       | Type      | Unit | Attributes                                                                                     | Description                                                                                                                                                                                                      |
+| -------------------------------------------- | --------- | ---- | ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `subgraph_mock.response_generation.duration` | Histogram | `s`  | `subgraph.name` (if known)                                                                     | Time spent parsing, validating, and building a response body. Excludes cache hits, injected latency, and HTTP-layer overhead.                                                                                    |
+| `subgraph_mock.response_cache.lookups`       | Counter   | -    | `cache.result` (`hit`/`miss`), `subgraph.name` (if known)                                      | Count of response-cache lookups for `cache_responses`-enabled subgraphs (on by default). A miss paid the cost recorded by `subgraph_mock.response_generation.duration`; a hit didn't.                            |
+| `subgraph_mock.cache.size`                   | Gauge     | -    | `cache` (`parse_and_validate`, `cached_trace_shape`, or `into_response_bytes_and_status_code`) | Current entry count of subgraph-mock's internal caches, sampled every 30 seconds. None of them ever evict, so steady growth over a run's lifetime signals unbounded memory use rather than expected cache reuse. |
+
+The OTel SDK's default histogram bucket boundaries are calibrated for millisecond-scale values, not
+the seconds these two duration histograms record in — see the `views` example in
+`example-config.yaml` for why that matters and the boundaries to use instead.
+
 #### Subgraph Overrides
 
 If your test scenario calls for behavioral differences between subgraphs, the mock server will
