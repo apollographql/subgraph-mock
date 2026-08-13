@@ -123,9 +123,9 @@ dependencies = [
 
 [[package]]
 name = "apollo-configuration"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "811fb50d302d4bea931921bb6e2b4e144cef987785e13806930bd9906e787f56"
+checksum = "3d9001a39d9e86b4ff59c8cf7c53d921def9e343cc576a61c3d73dfda7b5c15a"
 dependencies = [
  "apollo-configuration-macros",
  "apollo-errors",
@@ -147,9 +147,9 @@ dependencies = [
 
 [[package]]
 name = "apollo-configuration-macros"
-version = "0.1.1"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6342c3e108a1ddd490bc233716be5883c70979459a622c2ca00041cad877a1d0"
+checksum = "373d7eddf1e75f4b0ca4da95effef3718d35f8b4c872d03d4255f7865e54726d"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -160,9 +160,9 @@ dependencies = [
 
 [[package]]
 name = "apollo-errors"
-version = "0.7.1"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f577548eb2bd2179db609f7f57a8e0e9cf3227720c33d8ca2ed526989f230a38"
+checksum = "1d5cf44258823c08833e50f636c236f9e99e24bf86c101b9439c618ee89754d9"
 dependencies = [
  "apollo-errors-derive",
  "http",
@@ -174,9 +174,9 @@ dependencies = [
 
 [[package]]
 name = "apollo-errors-derive"
-version = "0.5.1"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9bf4b8684df707bfdbad5e39fb7d37c695714ab866d5c29d9957682db2619f70"
+checksum = "32ec8eb2c4bc1595b02f216bbfc359a37d79f4c9ee873884eddc30a3d14a833b"
 dependencies = [
  "heck",
  "http",
@@ -198,9 +198,9 @@ dependencies = [
 
 [[package]]
 name = "apollo-redaction"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "879cf40f6ba6cf15a9e5d88cf5e0e832713b1fd98d06c4049048b9a6a2f36c53"
+checksum = "ee5c186b11ec1553f416f59edc59c5f12e380a73cac07773863acf8170aa93dd"
 dependencies = [
  "schemars",
  "serde",
