@@ -11,16 +11,6 @@ pub enum HandlerError {
     #[http_status(400)]
     InvalidJson { source: serde_json::Error },
 
-    #[error("invalid graphql query: {message}")]
-    #[diagnostic(code(graphql::invalid_query))]
-    #[http_status(400)]
-    InvalidQuery {
-        #[extension]
-        message: String,
-        #[extension]
-        errors: Value,
-    },
-
     #[error("{message}")]
     #[diagnostic(code(graphql::request_error))]
     #[http_status(400)]
