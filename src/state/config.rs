@@ -1,38 +1,35 @@
 use crate::{
+    error::{Error, Result},
     handle::graphql::ResponseGenerationConfig,
     latency::{LatencyConfig, LatencyGenerator},
 };
-use anyhow::Error;
+use apollo_configuration::{ParseYamlOptions, configuration};
 use hyper::{
     HeaderMap,
     header::{HeaderName, HeaderValue},
 };
-use serde::{Deserialize, Serialize};
 use serde_json_bytes::serde_json;
 use serde_yaml::Value;
-use std::collections::HashMap;
+use std::{collections::HashMap, fs, path::Path};
 use tracing::{info, warn};
 
 /// Allowed in the YAML, but not represented in the [BaseConfig] struct as we
 /// neither want nor need that data structure to be recursive.
 const SUBGRAPH_OVERRIDES_KEY: &str = "subgraph_overrides";
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[configuration]
 struct BaseConfig {
-    #[serde(default = "default_port")]
+    #[config(default = default_port())]
     pub port: u16,
     /// Seed for the server's random number generator. Omit for non-reproducible
     /// (OS-sourced) randomness. Global only: setting this in a subgraph override
     /// has no effect, since all subgraphs share a single RNG.
-    #[serde(default)]
     pub seed: Option<u64>,
-    #[serde(default)]
     pub headers: HashMap<String, String>,
-    #[serde(default)]
+    #[config(default = LatencyConfig::default_with_sine())]
     pub latency: LatencyConfig,
-    #[serde(default)]
     pub response_generation: ResponseGenerationConfig,
-    #[serde(default = "default_cache_responses")]
+    #[config(default = default_cache_responses())]
     pub cache_responses: bool,
 }
 
@@ -44,23 +41,10 @@ fn default_cache_responses() -> bool {
     true
 }
 
-impl Default for BaseConfig {
-    fn default() -> Self {
-        Self {
-            port: default_port(),
-            seed: Default::default(),
-            headers: Default::default(),
-            latency: Default::default(),
-            response_generation: Default::default(),
-            cache_responses: default_cache_responses(),
-        }
-    }
-}
-
 impl BaseConfig {
     pub fn into_parts(
         self,
-    ) -> anyhow::Result<(
+    ) -> Result<(
         u16,
         bool,
         LatencyGenerator,
@@ -71,7 +55,7 @@ impl BaseConfig {
         let latency_generator = LatencyGenerator::new(self.latency);
 
         info!(headers=%serde_json::to_string(&self.headers).unwrap(), "additional headers");
-        let additional_headers: anyhow::Result<HeaderMap<HeaderValue>> = self
+        let additional_headers: Result<HeaderMap<HeaderValue>> = self
             .headers
             .into_iter()
             .map(|(k, v)| Ok((HeaderName::try_from(&k)?, HeaderValue::try_from(&v)?)))
@@ -113,7 +97,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             headers: Default::default(),
-            latency_generator: LatencyGenerator::new(LatencyConfig::default()),
+            latency_generator: LatencyGenerator::new(LatencyConfig::default_with_sine()),
             response_generation: Default::default(),
             cache_responses: default_cache_responses(),
             subgraph_overrides: Default::default(),
@@ -122,11 +106,17 @@ impl Default for Config {
 }
 
 impl Config {
+    /// Reads and parses a YAML config file into a resolved port, RNG seed, and [Config]
+    pub fn from_file(path: &Path) -> Result<(u16, Option<u64>, Config)> {
+        let bytes = fs::read(path)?;
+        let value = serde_yaml::from_slice(&bytes)?;
+
+        Self::parse_yaml(value)
+    }
+
     /// Parses a YAML file into a resolved port, RNG seed, and [Config]
-    pub fn parse_yaml(mut base: Value) -> anyhow::Result<(u16, Option<u64>, Config)> {
-        let mapping = base
-            .as_mapping_mut()
-            .ok_or_else(|| Error::msg("config file must be a mapping"))?;
+    pub fn parse_yaml(mut base: Value) -> Result<(u16, Option<u64>, Config)> {
+        let mapping = base.as_mapping_mut().ok_or(Error::NotAMapping)?;
 
         let mut subgraph_cache_responses = HashMap::new();
         let mut subgraph_headers = HashMap::new();
@@ -138,10 +128,13 @@ impl Config {
                 Value::Mapping(mapping) => {
                     for (subgraph_name, subgraph_override) in mapping {
                         let mut subgraph_config = base.clone();
+                        let subgraph_name: String = serde_yaml::from_value(subgraph_name)?;
 
-                        let override_mapping = subgraph_override
-                            .as_mapping()
-                            .ok_or_else(|| Error::msg("subgraph override must be a mapping"))?;
+                        let override_mapping = subgraph_override.as_mapping().ok_or_else(|| {
+                            Error::OverrideNotAMapping {
+                                subgraph: subgraph_name.clone(),
+                            }
+                        })?;
 
                         if override_mapping.contains_key("port") {
                             warn!("port overrides for subgraphs will be ignored")
@@ -152,8 +145,11 @@ impl Config {
                         }
 
                         merge_yaml(subgraph_override, &mut subgraph_config);
-                        let parsed_config: BaseConfig = serde_yaml::from_value(subgraph_config)?;
-                        let subgraph_name: String = serde_yaml::from_value(subgraph_name)?;
+                        let subgraph_config_text = serde_yaml::to_string(&subgraph_config)?;
+                        let parsed_config: BaseConfig = apollo_configuration::parse_yaml(
+                            &subgraph_config_text,
+                            &ParseYamlOptions::default(),
+                        )?;
 
                         info!("generating customized config for {}", subgraph_name);
                         let (
@@ -172,11 +168,13 @@ impl Config {
                             .insert(subgraph_name, response_generation);
                     }
                 }
-                _ => return Err(Error::msg("config file must be a mapping")),
+                _ => return Err(Error::NotAMapping),
             }
         }
 
-        let base_config = serde_yaml::from_value::<BaseConfig>(base)?;
+        let base_config_text = serde_yaml::to_string(&base)?;
+        let base_config: BaseConfig =
+            apollo_configuration::parse_yaml(&base_config_text, &ParseYamlOptions::default())?;
         let seed = base_config.seed;
         info!(seed = ?seed, "rng seed");
 
