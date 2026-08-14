@@ -427,13 +427,10 @@ async fn generate_body(
         Err(err) => {
             let errors: Vec<_> = err.errors.iter().map(|d| d.to_json()).collect();
             error!(?errors, query=%req.query, "invalid graphql query");
-            let message = errors
-                .first()
-                .map(|error| error.message.clone())
-                .unwrap_or_else(|| "invalid graphql query".to_string());
-            let errors = serde_json::to_value(&errors).unwrap_or_default();
+            let bytes = serde_json::to_vec(&json!({ "data": Value::Null, "errors": errors }))
+                .unwrap_or_default();
 
-            return HandlerError::InvalidQuery { message, errors }.to_response();
+            return (bytes.into(), StatusCode::BAD_REQUEST);
         }
     };
 

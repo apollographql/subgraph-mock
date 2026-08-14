@@ -69,17 +69,18 @@ async fn invalid_query_carries_every_diagnostic() -> anyhow::Result<()> {
     let (status, json) = post(state, &body).await?;
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    let (code, extensions) = first_error(&json);
-    assert_eq!(code, "graphql::invalid_query");
+    assert_eq!(json.get("data"), Some(&Value::Null), "got {json:?}");
 
-    let diagnostics = extensions
+    // Per the GraphQL spec, each validation diagnostic is its own top-level `errors[]` entry,
+    // not nested under a single entry's `extensions`.
+    let errors = json
         .get("errors")
         .and_then(Value::as_array)
-        .expect("extensions.errors should be an array of every diagnostic");
-    assert_eq!(diagnostics.len(), 4);
-    for diagnostic in diagnostics {
-        assert!(diagnostic.get("message").is_some());
-        assert!(diagnostic.get("locations").is_some());
+        .unwrap_or_else(|| panic!("expected an errors array, got {json:?}"));
+    assert_eq!(errors.len(), 4);
+    for error in errors {
+        assert!(error.get("message").is_some());
+        assert!(error.get("locations").is_some());
     }
 
     Ok(())

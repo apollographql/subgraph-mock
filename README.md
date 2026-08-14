@@ -20,10 +20,6 @@ It does not support:
 - mutations
 - mixed queries with both introspection and concrete fields
 
-It is also not spec-compliant in how it reports validation errors: a query with multiple validation
-diagnostics (e.g. two unknown fields) produces a single `errors[]` entry, with the full diagnostic
-list nested under `extensions.errors[]`, instead of one `errors[]` entry per diagnostic.
-
 ### Features
 
 This mock server is mainly designed to act as multiple subgraphs behind a federated supergraph. It
