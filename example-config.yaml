@@ -171,7 +171,22 @@ telemetry:
             aggregation:
               explicit_bucket_histogram:
                 boundaries:
-                  [0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10]
+                  [
+                    0.005,
+                    0.01,
+                    0.025,
+                    0.05,
+                    0.075,
+                    0.1,
+                    0.25,
+                    0.5,
+                    0.75,
+                    1,
+                    2.5,
+                    5,
+                    7.5,
+                    10,
+                  ]
                 record_min_max: true
 
         # Same problem as above, but worse: subgraph_mock.response_generation.duration times just
@@ -187,7 +202,21 @@ telemetry:
             aggregation:
               explicit_bucket_histogram:
                 boundaries:
-                  [0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1]
+                  [
+                    0.0001,
+                    0.00025,
+                    0.0005,
+                    0.001,
+                    0.0025,
+                    0.005,
+                    0.01,
+                    0.025,
+                    0.05,
+                    0.1,
+                    0.25,
+                    0.5,
+                    1,
+                  ]
                 record_min_max: true
 
     # Context propagation: extracts an incoming router `traceparent` header so subgraph-mock's
@@ -219,6 +248,14 @@ telemetry:
       response_body_size: true
     # See apollo-http-server-telemetry's docs for more opt-ins (header capture, url.query,
     # peer/local network address) if you want deeper spans than this.
+
+# Single combined health check endpoint
+health:
+  # How long the health check stays unhealthy after a failed schema hot-reload before
+  # auto-recovering. Accepts human-readable durations: "30s", "5m", "1h30m".
+  recovery_ttl: 30s
+  # URL path at which the health endpoint is served.
+  path: /health
 
 # Any value except the listening port in the configuration can be
 # overridden at a per-subgraph level. Subgraphs do not map 1:1 with

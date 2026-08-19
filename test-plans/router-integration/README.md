@@ -3,6 +3,10 @@
 Validates that subgraph-mock's FTV1 traces reach the router and are decoded correctly under a modest
 volume of concurrent traffic, using mock-studio as a local stand-in for GraphOS ingest.
 
+Before generating any load, the scenario also polls the router's and subgraph-mock's own health
+endpoints directly (`scripts/verify-ftv1.js`'s `setup()`) and fails the run if either doesn't come
+up healthy in time - see "Health checking the router and subgraph-mock" below.
+
 The scenario runs a short k6 load (`scripts/verify-ftv1.js`, driven by this test plan's own
 hand-authored `data/canned-ops.json` - see below) against the router, then queries mock-studio's
 `GET /request-stats` and fails if:
@@ -42,6 +46,35 @@ with it on, `/studio`'s `traces_per_query` held only aggregated `stats_with_cont
 `traces` array, every time). This test plan validates FTV1 via mock-studio's `/v1/traces` (OTLP)
 decode, so `experimental_otlp_endpoint` points there with the full path - the router doesn't append
 `/v1/traces` on its own.
+
+## Health checking the router and subgraph-mock
+
+`scripts/verify-ftv1.js`'s `setup()` polls both the router's and subgraph-mock's health endpoints
+directly before generating any load, and hard-fails the whole run if either doesn't come up healthy
+in time - this test plan fully controls the environment, so an unready router or subgraph-mock at
+that point always means a real regression, not external flakiness. There's no docker-compose-level
+healthcheck sidecar for either anymore (there used to be, for local `rtf run` only) - it did nothing
+under the RTF Orchestrator, so a k6-based check that works the same way in both places replaced it.
+
+- **subgraph-mock** is polled at its own single combined `/health` endpoint (subgraph-mock's own
+  `apollo-healthcheck`-backed endpoint - see `example-config.yaml`'s `health` section), via
+  `SUBGRAPH_HEALTH_URL`.
+- **The router** is polled at `health_check_url` (this test plan's own `variables:` block, matching
+  the `orchestrator-k6-graphql` scenario's own variable of the same name - default `""`, which skips
+  the check entirely, since not every pulled scenario version defines it and not every target
+  exposes one).
+
+Both checks poll with a timeout rather than checking once (60s timeout, 2s interval), since a
+single-shot check can't tell "still starting up" apart from "actually down". This mirrors
+`health_check_url`'s own upstream implementation
+(`lib/custom-providers/k6-graphql/data/graphql-client.js`'s `waitForHealthy`, called from the
+upstream scenario's own k6 entry point, `graphql-test.js`) rather than inventing different retry
+semantics for the same kind of check - it has to be reimplemented here, rather than simply relied
+on, because this test plan's `docker.command`/`K6_TEST_ENTRY` overrides replace that entry point
+entirely with `scripts/verify-ftv1.js`, so `graphql-test.js` (and its call to `waitForHealthy`)
+never runs. The _value_ of `health_check_url` still reaches `scripts/verify-ftv1.js` regardless
+(baked into `$K6_CONFIG_FILE` by the `k6-graphql` custom_provider's own generation step, which our
+overrides don't touch) - only the code that reads and acts on it had to move.
 
 ## OTel metrics reaching Prometheus (orchestrator only)
 

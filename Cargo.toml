@@ -21,6 +21,7 @@ anyhow = "1.0.104"
 apollo-compiler = "1.31.1"
 apollo-configuration = { version = "0.5.0", default-features = false, features = ["duration", "http"] }
 apollo-errors = "0.8.0"
+apollo-healthcheck = "0.3.0"
 apollo-http-server-telemetry = "0.3.0"
 apollo-opentelemetry = { version = "0.10.0", default-features = false, features = ["otlp", "tower"] }
 apollo-smith = "0.16.0"

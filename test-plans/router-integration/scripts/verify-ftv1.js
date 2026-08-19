@@ -23,6 +23,20 @@ import { Counter } from 'k6/metrics';
 // otlp_tracing_sampler is deliberately always_on too: OTLP tracing and the legacy Report's
 // raw-trace embedding are mutually exclusive, so FTV1 is checked via mock-studio's
 // /v1/traces (OTLP) decode, not /studio - see this test plan's README.
+//
+// setup() also checks subgraph-mock's own /health endpoint directly before any load is
+// generated, for the same reason curl+jq is avoided above: k6's http client can do it
+// without adding a dependency the target image doesn't have.
+//
+// setup() also polls the router's own health_check_url, if the pulled orchestrator-k6-graphql
+// scenario version defines one (lib/custom-providers/k6-graphql's provider.yaml/
+// generate-k6-scripts.sh merge it into $K6_CONFIG_FILE as configData.health_check_url,
+// regardless of our docker.command/K6_TEST_ENTRY overrides below - only the *reading* of that
+// value is scenario-specific). The upstream scenario's own graphql-test.js would otherwise
+// call this via graphql-client.js's waitForHealthy, but our docker.command/K6_TEST_ENTRY
+// overrides replace that entry point with this file, so it never runs there - pollUntilHealthy
+// below mirrors its poll-with-timeout semantics (rather than a single-shot check) so this stays
+// a genuine wait for router startup, not a race against it.
 
 const MOCK_STUDIO_URL = __ENV.MOCK_STUDIO_URL;
 if (!MOCK_STUDIO_URL) {
@@ -30,6 +44,11 @@ if (!MOCK_STUDIO_URL) {
 }
 
 const GRAPHQL_URL = __ENV.GRAPHQL_URL || 'http://localhost:4000';
+
+const SUBGRAPH_HEALTH_URL = __ENV.SUBGRAPH_HEALTH_URL;
+if (!SUBGRAPH_HEALTH_URL) {
+  throw new Error('SUBGRAPH_HEALTH_URL environment variable is required');
+}
 
 const configPath = __ENV.K6_CONFIG_FILE;
 if (!configPath) {
@@ -71,7 +90,70 @@ export const options = {
   scenarios: adjustScenarioRates(configData.scenarios, operations.length),
 };
 
+// Shared by both health checks below. Polls rather than checking once: a single-shot check
+// can't tell "still starting up" apart from "actually down", and both the router (schema/query
+// plan warmup) and subgraph-mock can take a moment to come up. Mirrors rtf-morgue's own
+// waitForHealthy (lib/custom-providers/k6-graphql/data/graphql-client.js) rather than
+// inventing different retry semantics for the same kind of check.
+function pollUntilHealthy(label, url, isHealthy, timeoutMs = 60000, intervalMs = 2000) {
+  console.log(`${label}: polling ${url} (timeout ${timeoutMs}ms)`);
+  const deadline = Date.now() + timeoutMs;
+  let lastDetail = 'no response';
+
+  while (Date.now() < deadline) {
+    const res = http.get(url);
+    const result = isHealthy(res);
+    if (result.healthy) {
+      console.log(`${label}: ${url} -> ${res.status} (healthy)`);
+      return;
+    }
+    lastDetail = result.detail;
+    console.log(`${label}: ${url} -> ${lastDetail} (not healthy yet, retrying in ${intervalMs}ms)`);
+    sleep(intervalMs / 1000);
+  }
+
+  throw new Error(`${label} against ${url} did not become healthy within ${timeoutMs}ms (last: ${lastDetail})`);
+}
+
+// Checks the router directly, not through subgraph-mock (an obviously separate concern).
+// Opt-in and skipped when unset - see this test plan's README - since not every pulled
+// scenario version defines health_check_url, and not every target exposes a health check.
+function checkRouterHealth() {
+  if (!configData.health_check_url) {
+    console.log('router health check skipped: configData.health_check_url is unset');
+    return;
+  }
+
+  pollUntilHealthy('router health check', configData.health_check_url, res => ({
+    healthy: res.status >= 200 && res.status < 300,
+    detail: res.error ? `${res.status || 'error'} (${res.error})` : String(res.status),
+  }));
+}
+
+// Checked directly against subgraph-mock (not through the router, which doesn't proxy its
+// health endpoint). Both checks hard-fail the run - rather than being treated as
+// observational, the way environment.yaml's OTel-to-Prometheus check is - because this test
+// plan fully controls the environment, so an unready router or subgraph-mock at
+// load-generation time always means a real regression, never external flakiness.
+function checkSubgraphHealth() {
+  pollUntilHealthy('subgraph-mock health check', SUBGRAPH_HEALTH_URL, res => {
+    let status;
+    try {
+      status = JSON.parse(res.body).status;
+    } catch (e) {
+      status = undefined;
+    }
+    return {
+      healthy: res.status === 200 && status === 'healthy',
+      detail: `status=${res.status} body=${res.body}`,
+    };
+  });
+}
+
 export function setup() {
+  checkRouterHealth();
+  checkSubgraphHealth();
+
   console.log(`k6 GraphQL FTV1 volume test starting - ${operations.length} operation(s) per iteration`);
   console.log('resetting mock-studio request-stats before load generation');
   http.del(`${MOCK_STUDIO_URL}/request-stats`);
