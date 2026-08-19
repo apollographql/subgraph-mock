@@ -65,7 +65,7 @@ pub fn initialize(
             .map(|name| PathBuf::from(format!("{pkg_root}/tests/data/config/{name}"))),
         schema: schema_pathbuf(schema_file_name),
     };
-    let (port, state) = args.init()?;
+    let (port, state, _telemetry_config) = args.init()?;
 
     Ok((
         port,

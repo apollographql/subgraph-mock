@@ -13,11 +13,12 @@ use apollo_compiler::{
     validation::{Valid, WithErrors},
 };
 use apollo_configuration::{Validate, configuration};
+use apollo_opentelemetry::metrics::HistogramExt;
 use apollo_smith::{
     BooleanGenerator, FloatGenerator, Generator, Generators, IntGenerator, RandProvider,
     RandomProvider, ResponseBuilder, ResponseError, StringGenerator,
 };
-use cached::proc_macro::cached;
+use cached::{Cached, Return, proc_macro::cached};
 use http_body_util::{BodyExt, Empty, Full};
 use hyper::{
     HeaderMap, Response, StatusCode,
@@ -25,6 +26,7 @@ use hyper::{
     header::{HeaderName, HeaderValue},
 };
 use indexmap::IndexMap;
+use opentelemetry::{KeyValue, metrics::Histogram};
 use ordered_float::OrderedFloat;
 use rand::{RngExt, SeedableRng, rngs::StdRng, seq::IteratorRandom};
 use schemars::JsonSchema;
@@ -104,9 +106,36 @@ pub async fn handle(
         .unwrap_or_else(|| config.cache_responses);
 
     let (bytes, status_code) = if cache_enabled {
-        into_response_bytes_and_status_code(rgen_cfg, req, &schema, cache_hash, &mut rng).await
+        let result = into_response_bytes_and_status_code(
+            rgen_cfg,
+            req,
+            &schema,
+            cache_hash,
+            &mut rng,
+            subgraph_name,
+            &state.response_generation_duration,
+        )
+        .await;
+
+        let mut attrs = vec![KeyValue::new(
+            "cache.result",
+            if result.was_cached { "hit" } else { "miss" },
+        )];
+        push_subgraph_attr(&mut attrs, subgraph_name);
+        state.response_cache_lookups.add(1, &attrs);
+
+        result.value
     } else {
-        generate_body(rgen_cfg, req, &schema, cache_hash, &mut rng).await
+        generate_body(
+            rgen_cfg,
+            req,
+            &schema,
+            cache_hash,
+            &mut rng,
+            subgraph_name,
+            &state.response_generation_duration,
+        )
+        .await
     };
 
     // FTV1 traces are spliced in here, off the cached hot path, so cached bytes stay byte-for-byte
@@ -368,7 +397,12 @@ fn primary_operation(doc: &ExecutableDocument) -> Option<&Node<Operation>> {
     doc.operations.iter().next()
 }
 
-#[cached(result = true, key = "u64", convert = "{_cache_hash}")]
+#[cached(
+    name = "PARSE_AND_VALIDATE_CACHE",
+    result = true,
+    key = "u64",
+    convert = "{_cache_hash}"
+)]
 fn parse_and_validate(
     req: &GraphQLRequest,
     schema: &FederatedSchema,
@@ -390,7 +424,11 @@ fn parse_and_validate(
 ///
 /// Same memory caveat as `parse_and_validate`/`into_response_bytes_and_status_code`: entries are
 /// never invalidated, so hot-reloading the schema/config repeatedly will grow this cache over time.
-#[cached(key = "u64", convert = "{_cache_hash}")]
+#[cached(
+    name = "CACHED_TRACE_SHAPE_CACHE",
+    key = "u64",
+    convert = "{_cache_hash}"
+)]
 fn cached_trace_shape(
     op: &Node<Operation>,
     doc: &ExecutableDocument,
@@ -399,26 +437,42 @@ fn cached_trace_shape(
     ftv1::Trace::build_shape(op, doc)
 }
 
-#[tracing::instrument(skip(req, schema, rng))]
-#[cached(key = "u64", convert = "{cache_hash}")]
+#[apollo_opentelemetry::traced]
+#[cached(
+    name = "RESPONSE_BYTES_CACHE",
+    key = "u64",
+    convert = "{cache_hash}",
+    with_cached_flag = true
+)]
 async fn into_response_bytes_and_status_code(
     cfg: &ResponseGenerationConfig,
     req: GraphQLRequest,
     schema: &FederatedSchema,
     cache_hash: u64,
     rng: &mut StdRng,
-) -> (Bytes, StatusCode) {
-    generate_body(cfg, req, schema, cache_hash, rng).await
+    subgraph_name: Option<&str>,
+    histogram: &Histogram<f64>,
+) -> Return<(Bytes, StatusCode)> {
+    Return::new(generate_body(cfg, req, schema, cache_hash, rng, subgraph_name, histogram).await)
 }
 
-#[tracing::instrument(skip(req, schema, rng))]
+#[apollo_opentelemetry::traced]
 async fn generate_body(
     cfg: &ResponseGenerationConfig,
     req: GraphQLRequest,
     schema: &FederatedSchema,
     cache_hash: u64,
     rng: &mut StdRng,
+    subgraph_name: Option<&str>,
+    histogram: &Histogram<f64>,
 ) -> (Bytes, StatusCode) {
+    // Guard records elapsed time on drop (any return path, or if this future is cancelled
+    // mid-poll), so it must live for the whole function — hence the leading underscore rather
+    // than being dropped explicitly.
+    let mut attrs = Vec::new();
+    push_subgraph_attr(&mut attrs, subgraph_name);
+    let _duration = histogram.record_duration_on_drop(attrs);
+
     debug!(%cache_hash, req.operation_name, "handling graphql request");
     trace!(variables=?req.variables, "request variables");
 
@@ -472,6 +526,42 @@ async fn generate_body(
             HandlerError::SerializationFailed { source }.to_response()
         }
     }
+}
+
+/// Appends a `subgraph.name` attribute if `subgraph_name` is known, so metrics recorded for a
+/// given subgraph's traffic can be told apart from another's.
+fn push_subgraph_attr(attrs: &mut Vec<KeyValue>, subgraph_name: Option<&str>) {
+    if let Some(name) = subgraph_name {
+        attrs.push(KeyValue::new("subgraph.name", name.to_string()));
+    }
+}
+
+/// Current entry count of each of this module's `#[cached]` caches, paired with the `cache` name
+/// it should be tagged with when reported.
+pub(crate) fn cache_sizes() -> Vec<(&'static str, i64)> {
+    let mut sizes = vec![
+        (
+            "parse_and_validate",
+            PARSE_AND_VALIDATE_CACHE.lock().cache_size() as i64,
+        ),
+        (
+            "cached_trace_shape",
+            CACHED_TRACE_SHAPE_CACHE.lock().cache_size() as i64,
+        ),
+    ];
+
+    // This one's function is async, so its generated cache uses an async (tokio) mutex rather
+    // than the sync one the two caches above get — no blocking `.lock()` available here. Losing
+    // the race just omits this cache from this tick's sample; the next tick tries again, and the
+    // lock is only ever held for the moment of an actual cache read/write.
+    if let Ok(cache) = RESPONSE_BYTES_CACHE.try_lock() {
+        sizes.push((
+            "into_response_bytes_and_status_code",
+            cache.cache_size() as i64,
+        ));
+    }
+
+    sizes
 }
 
 /// Converts an `apollo_compiler` [request error](https://spec.graphql.org/draft/#sec-Errors.Request-errors)
@@ -904,6 +994,67 @@ mod tests {
             "shape should still reflect doc_a's `{{ posts {{ title }} }}`, not doc_b's extra `views`"
         );
         assert_eq!(posts.child[0].response_name, "title");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cache_sizes_grows_when_a_new_cache_hash_is_inserted() -> anyhow::Result<()> {
+        let supergraph = include_str!("../../tests/data/schema.graphql");
+        let schema = FederatedSchema::parse_string(supergraph, "../../tests/data/schema.graphql")?;
+        let req = GraphQLRequest {
+            query: "{ posts { title } }".to_string(),
+            operation_name: None,
+            variables: JsonMap::new(),
+        };
+
+        // An improbable cache_hash no other test/request could plausibly compute (same rationale
+        // as `cached_trace_shape_reuses_cache_hash_regardless_of_document`), so this test's
+        // inserts can't collide with any other test's or request's. Shared between both calls
+        // below deliberately: `into_response_bytes_and_status_code` calls `parse_and_validate`
+        // internally with whatever `cache_hash` it's given, so reusing the same one here means
+        // that internal call is a hit against the entry the first call already inserted, rather
+        // than a second, separate insert this test would otherwise have to account for.
+        const CACHE_HASH: u64 = 0x63616368655f7331;
+
+        let before = cache_sizes();
+
+        parse_and_validate(&req, &schema, CACHE_HASH).unwrap();
+
+        let histogram = opentelemetry::global::meter_provider()
+            .meter("test")
+            .f64_histogram("test.duration")
+            .build();
+        into_response_bytes_and_status_code(
+            &ResponseGenerationConfig::default(),
+            req,
+            &schema,
+            CACHE_HASH,
+            &mut StdRng::seed_from_u64(0),
+            None,
+            &histogram,
+        )
+        .await;
+
+        let after = cache_sizes();
+        let size_of = |sizes: &[(&str, i64)], cache: &str| {
+            sizes
+                .iter()
+                .find(|(name, _)| *name == cache)
+                .map(|(_, size)| *size)
+                .unwrap_or_else(|| panic!("no `{cache}` entry in cache_sizes()"))
+        };
+
+        assert_eq!(
+            size_of(&after, "parse_and_validate"),
+            size_of(&before, "parse_and_validate") + 1,
+            "parse_and_validate's cache should have grown by exactly the one entry just inserted"
+        );
+        assert_eq!(
+            size_of(&after, "into_response_bytes_and_status_code"),
+            size_of(&before, "into_response_bytes_and_status_code") + 1,
+            "the response-bytes cache should have grown by exactly the one entry just inserted"
+        );
 
         Ok(())
     }

@@ -1,0 +1,22 @@
+services:
+  subgraph:
+    image: ${SUBGRAPH_IMAGE}
+    labels:
+      rtf.io/file-providers: true
+    container_name: subgraph-mock
+    command:
+      - --schema
+      - ${SUPERGRAPH_SCHEMA}
+      - --config
+      - ${SUBGRAPH_CONFIG_FILE}
+    expose:
+      - "8080"
+    restart: unless-stopped
+
+  # Gives the scenario script something with curl on subgraph-mock's own compose network to
+  # `docker exec` into.
+  curl-sidecar:
+    image: curlimages/curl:latest
+    container_name: curl-sidecar
+    command: ["tail", "-f", "/dev/null"]
+    restart: unless-stopped

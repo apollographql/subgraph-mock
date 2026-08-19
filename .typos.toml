@@ -4,3 +4,11 @@
 extend-exclude = [
     "tests/data/*.graphql"
 ]
+
+[default]
+# W3C trace/span IDs (e.g. traceparent hex identifiers used in otel test
+# fixtures) get false-positive flagged when typos' word-splitter extracts
+# a dictionary-adjacent substring (e.g. "ba" out of "00f067aa0ba902b7").
+extend-ignore-re = [
+    "[0-9a-f]{16,32}"
+]

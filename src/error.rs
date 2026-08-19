@@ -54,6 +54,10 @@ pub enum Error {
     #[error(transparent)]
     #[diagnostic(transparent)]
     Schema(#[from] SchemaError),
+
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    Telemetry(#[from] apollo_opentelemetry::InitError),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

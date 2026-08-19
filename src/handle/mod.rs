@@ -4,8 +4,9 @@ use hyper::{
     Method, Request, Response, StatusCode,
     body::{Body, Bytes},
 };
-use std::{error::Error, sync::Arc};
+use std::sync::Arc;
 use tokio::time::{Instant, sleep};
+use tower::BoxError;
 use tracing::{trace, warn};
 
 pub mod error;
@@ -17,7 +18,7 @@ pub type ByteResponse = Response<BoxBody<Bytes, hyper::Error>>;
 pub async fn handle_request<B>(req: Request<B>, state: Arc<State>) -> Result<ByteResponse, B::Error>
 where
     B: Body,
-    B::Error: Error + Send + Sync + 'static,
+    B::Error: Into<BoxError>,
 {
     let (parts, body) = req.into_parts();
     let (method, path) = (parts.method, parts.uri.path());
@@ -38,6 +39,8 @@ where
                 .split('/')
                 .nth(1)
                 .expect("split will yield at least 2 elements based on the match condition");
+
+            apollo_opentelemetry::span_attr!("subgraph.name" = subgraph_name);
 
             let rgen_cfg = config
                 .subgraph_overrides
