@@ -1,0 +1,67 @@
+supergraph:
+  introspection: true
+  listen: 0.0.0.0:4000
+  path: /{*wildcard}
+  defer_support: true
+  experimental_log_on_broken_pipe: true
+  query_planning:
+    warmed_up_queries: 4000
+    cache:
+      in_memory:
+        limit: 512
+
+health_check:
+  listen: 0.0.0.0:4000
+  enabled: true
+  path: /health
+
+# The supergraph SDL declares each subgraph's URL as http://localhost:400{1,2}/ (its
+# original, non-docker location). Both names route to the single subgraph-mock container,
+# which serves the whole supergraph schema on one port regardless of which subgraph a
+# request is nominally for.
+override_subgraph_url:
+  posts: http://subgraph:8080
+  users: http://subgraph:8080
+
+include_subgraph_errors:
+  all: true
+cors:
+  allow_any_origin: true
+plugins:
+  experimental.expose_query_plan: true
+homepage:
+  enabled: false
+
+telemetry:
+  apollo:
+    # otlp_tracing_sampler and the legacy Report's raw-trace embedding are mutually
+    # exclusive: whichever one is "on" is where the router sends the raw per-request
+    # trace - confirmed by observing the router's own submitted Report with otlp on:
+    # traces_per_query held only aggregated stats_with_context, an empty traces array,
+    # every time. This test plan validates FTV1 via mock-studio's /v1/traces (OTLP)
+    # decode, so OTLP tracing must stay on; the endpoint needs the full /v1/traces path
+    # since the router doesn't append it automatically.
+    otlp_tracing_sampler: always_on
+    experimental_otlp_endpoint: http://mock-studio:1234/v1/traces
+    experimental_otlp_tracing_protocol: http
+    # Without this, whether a given request's subgraph traces arrive raw (decodable by
+    # mock-studio's FTV1 walk) or only as pre-aggregated stats (which it doesn't decode)
+    # is sampled and non-deterministic. always_on makes that deterministic instead of a
+    # random subset - though whether any FTV1 data actually shows up still depends on
+    # the subgraph itself sending it.
+    field_level_instrumentation_sampler: always_on
+    send_headers:
+      except:
+        ["X-Forwarded-For", "Cookie", "From", "client-ip", "authorization"]
+    tracing:
+      batch_processor:
+        # Default is 5s; shortened so the verify script doesn't need a long sleep to
+        # wait out the export batch window after the request completes.
+        scheduled_delay: 1s
+  exporters:
+    tracing:
+      common:
+        # Explicit even though this is already the router's default: the OTLP sampler
+        # above is applied *after* this one, so an off/low common sampler would silently
+        # zero out the exported trace regardless of otlp_tracing_sampler.
+        sampler: 1

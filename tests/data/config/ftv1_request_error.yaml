@@ -1,0 +1,4 @@
+response_generation:
+  ftv1: true
+  graphql_errors:
+    request_error_ratio: [1, 1]

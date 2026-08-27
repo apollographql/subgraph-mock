@@ -1,0 +1,35 @@
+# `batch`/default intervals are used here deliberately, not shortened -- this test proves
+# subgraph-mock's graceful shutdown (SIGTERM flushes buffered telemetry before exit) works with
+# realistic settings, not just because a short interval happened to tick in time. The scenario
+# script stops this container explicitly (rather than waiting on a timer) before reading its log.
+telemetry:
+  otel:
+    resource:
+      attributes:
+        - name: deployment.environment
+          value: rtf-otel-verification
+
+    tracer_provider:
+      processors:
+        - batch:
+            exporter:
+              console: {}
+
+    meter_provider:
+      readers:
+        - periodic:
+            exporter:
+              console: {}
+
+    # Extracts the scenario's fixed traceparent header so its span parents correctly instead of
+    # starting a disconnected root -- this is the propagation behavior being verified.
+    propagator:
+      composite: [tracecontext]
+
+  http:
+    spans:
+      request_body_size: true
+      response_body_size: true
+    metrics:
+      request_body_size: true
+      response_body_size: true

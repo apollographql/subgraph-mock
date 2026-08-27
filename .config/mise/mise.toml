@@ -13,11 +13,15 @@ run = [
     "mise run pr-rustdoc",
     "mise run pr-spell-check",
     "mise run pr-markdown",
-    "mise run pr-test"
+    "mise run pr-test",
+    "mise run pr-deny"
 ]
 
 [tasks.pr-clippy]
 run = "cargo pr-clippy"
+
+[tasks.pr-deny]
+run = "cargo deny check"
 
 [tasks.pr-rustdoc]
 run = "RUSTDOCFLAGS=\"-D warnings -D rustdoc::broken-intra-doc-links\" cargo doc --all-features --workspace --no-deps"
@@ -37,9 +41,10 @@ run = "typos"
 run = "cargo test"
 
 [tools]
+"cargo:cargo-deny" = "0.20.2"
 "cargo:cargo-expand" = "1.0.116"
-"cargo:cargo-llvm-cov" = "0.8.0"
+"cargo:cargo-llvm-cov" = "0.9.0"
 "cargo:typos-cli" = "1.34.0"
-"cargo:dprint" = "0.54.0"
+"cargo:dprint" = "0.56.0"
 mdbook = "0.4.51"
-rust = "1.96.0"
+rust = "1.98.0"

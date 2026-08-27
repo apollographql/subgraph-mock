@@ -1,0 +1,43 @@
+name: otel-verification
+description: |
+  Sends two requests to subgraph-mock with telemetry.otel/telemetry.http turned on: one plain,
+  and one carrying a fixed W3C traceparent header. Then stops subgraph-mock's container
+  directly (forcing its buffered telemetry to flush via graceful shutdown -- see
+  SPEC_otel-integration.md's shutdown-handling section) and reads its captured stdout straight
+  back into this same script to verify the actual span/metric content, no OTel Collector and no
+  remote orchestrator required.
+
+  This is a Script scenario, not a Docker one: it runs directly on the host (wherever `rtf run`
+  runs), which is what gives it real `docker` CLI access to stop subgraph-mock and read its
+  logs. A Docker-scenario container can't do either of those to a sibling container.
+
+  The two HTTP requests themselves go through `curl-sidecar` (data/docker-compose.yaml) via
+  `docker exec` instead of a direct curl (see scripts/verify-otel.sh): wherever `rtf` itself
+  runs has no guaranteed network-namespace relationship to wherever subgraph-mock's ports
+  land -- under CI, `rtf` runs inside a wrapper container that shares only the docker socket
+  with the real host, not its network -- but `docker exec` only needs that socket.
+
+variable_definitions:
+  - name: graphql_url
+    description: "subgraph-mock's endpoint, reached by its compose service/container name"
+    default: "http://subgraph-mock:8080/otel-verification"
+
+  - name: traceparent
+    description: |
+      Fixed W3C traceparent sent on the second request, so the log this scenario verifies has
+      an exact, known trace ID/span ID to search for instead of a fuzzy match.
+    default: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+
+  - name: subgraph_container
+    description: "Must match data/docker-compose.yaml's subgraph service's container_name"
+    default: "subgraph-mock"
+
+command:
+  name: verify-otel
+  kind: relative_path
+  path: scripts/verify-otel.sh
+
+env_vars:
+  GRAPHQL_URL: "{{ graphql_url }}"
+  TRACEPARENT: "{{ traceparent }}"
+  SUBGRAPH_CONTAINER: "{{ subgraph_container }}"

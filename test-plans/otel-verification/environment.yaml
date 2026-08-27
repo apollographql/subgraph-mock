@@ -1,0 +1,36 @@
+name: Subgraph mock OTel verification
+description: |
+  Runs subgraph-mock alone (no router, no mock-studio -- this validates subgraph-mock's own
+  telemetry, not anything downstream) with telemetry.otel/telemetry.http turned on and the
+  console exporter, so its spans/metrics are readable directly from its container's stdout.
+
+  subgraph-mock's port is only exposed on the compose network, not published to the host: this
+  test plan's scenario is a Script, not a Docker one, so it has no guaranteed network-namespace
+  relationship to wherever it actually runs (see scripts/verify-otel.sh) and reaches
+  subgraph-mock over this network via the curl-sidecar service (data/docker-compose.yaml)
+  instead.
+
+variable_definitions:
+  - name: subgraph_image
+    description: "The subgraph docker image:tag"
+
+project_name: "subgraph-mock-otel"
+
+compose_files:
+  - name: compose.yaml
+    kind: relative_path
+    path: data/docker-compose.yaml
+
+file_providers:
+  - name: subgraph-config.yaml
+    env_var: SUBGRAPH_CONFIG_FILE
+    kind: relative_path
+    path: data/subgraph-config.yaml
+
+  - name: supergraph.graphql
+    env_var: SUPERGRAPH_SCHEMA
+    kind: relative_path
+    path: ../../tests/data/schema.graphql
+
+env_vars:
+  SUBGRAPH_IMAGE: "{{ subgraph_image }}"

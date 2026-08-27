@@ -1,21 +1,24 @@
 use crate::{
-    handle::ByteResponse,
+    ftv1,
+    handle::{ByteResponse, error::HandlerError},
     state::{Config, FederatedSchema, State},
 };
-use anyhow::anyhow;
 use apollo_compiler::{
     ExecutableDocument, Name, Node,
     ast::OperationType,
     executable::{Field, Operation, Selection},
-    request::coerce_variable_values,
+    parser::SourceMap,
+    request::{RequestError, coerce_variable_values},
     response::JsonMap,
     validation::{Valid, WithErrors},
 };
+use apollo_configuration::{Validate, configuration};
+use apollo_opentelemetry::metrics::HistogramExt;
 use apollo_smith::{
     BooleanGenerator, FloatGenerator, Generator, Generators, IntGenerator, RandProvider,
     RandomProvider, ResponseBuilder, ResponseError, StringGenerator,
 };
-use cached::proc_macro::cached;
+use cached::{Cached, Return, proc_macro::cached};
 use http_body_util::{BodyExt, Empty, Full};
 use hyper::{
     HeaderMap, Response, StatusCode,
@@ -23,8 +26,10 @@ use hyper::{
     header::{HeaderName, HeaderValue},
 };
 use indexmap::IndexMap;
+use opentelemetry::{KeyValue, metrics::Histogram};
 use ordered_float::OrderedFloat;
 use rand::{RngExt, SeedableRng, rngs::StdRng, seq::IteratorRandom};
+use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json_bytes::{
     ByteString, Map, Value, json,
@@ -42,19 +47,17 @@ pub async fn handle(
     body_bytes: Vec<u8>,
     subgraph_name: Option<&str>,
     state: Arc<State>,
-) -> anyhow::Result<ByteResponse> {
+    should_emit_ftv1: bool,
+) -> ByteResponse {
     let req: GraphQLRequest = match serde_json::from_slice(&body_bytes) {
         Ok(req) => req,
-        Err(err) => {
-            error!(%err, "received invalid graphql request");
-            let mut resp = Response::new(
-                Full::new(err.to_string().into_bytes().into())
-                    .map_err(|never| match never {})
-                    .boxed(),
-            );
-            *resp.status_mut() = StatusCode::BAD_REQUEST;
+        Err(source) => {
+            error!(%source, "received invalid graphql request");
+            let (bytes, status) = HandlerError::InvalidJson { source }.to_response();
+            let mut resp = Response::new(Full::new(bytes).map_err(|never| match never {}).boxed());
+            *resp.status_mut() = status;
 
-            return Ok(resp);
+            return resp;
         }
     };
 
@@ -82,18 +85,28 @@ pub async fn handle(
     schema.hash(&mut hasher);
     let cache_hash = hasher.finish();
 
+    // The cached response bytes are time-independent, but a trace is per-request, so capture just
+    // enough of the request to rebuild the trace after the (potentially cached) response bytes are
+    // produced, rather than threading `req` itself through the cached path.
+    let ftv1_req = should_emit_ftv1.then(|| GraphQLRequest {
+        query: req.query.clone(),
+        operation_name: req.operation_name.clone(),
+        variables: JsonMap::new(),
+    });
+
     // We draw exactly one RNG per request and thread it sequentially through  http-error injection, response
     // generation, and header injection. With a seeded `RngSource`, that gives stable aggregate counts under
     // concurrent dispatch.
     let mut rng = state.rng.next();
 
-    if let Some((numerator, denominator)) = rgen_cfg.http_error_ratio
+    if let Some(Ratio(numerator, denominator)) = rgen_cfg.http_error_ratio
         && rng.random_ratio(numerator, denominator)
     {
-        return Response::builder()
-            .status(rng.random_range(500..=504))
-            .body(Empty::new().map_err(|never| match never {}).boxed())
-            .map_err(|err| err.into());
+        let mut resp = Response::new(Empty::new().map_err(|never| match never {}).boxed());
+        *resp.status_mut() = StatusCode::from_u16(rng.random_range(500..=504))
+            .expect("500..=504 is always a valid HTTP status code");
+
+        return resp;
     }
 
     let cache_enabled = subgraph_name
@@ -101,9 +114,53 @@ pub async fn handle(
         .unwrap_or_else(|| config.cache_responses);
 
     let (bytes, status_code) = if cache_enabled {
-        into_response_bytes_and_status_code(rgen_cfg, req, &schema, cache_hash, &mut rng).await
+        let result = into_response_bytes_and_status_code(
+            rgen_cfg,
+            req,
+            &schema,
+            cache_hash,
+            &mut rng,
+            subgraph_name,
+            &state.response_generation_duration,
+        )
+        .await;
+
+        let mut attrs = vec![KeyValue::new(
+            "cache.result",
+            if result.was_cached { "hit" } else { "miss" },
+        )];
+        push_subgraph_attr(&mut attrs, subgraph_name);
+        state.response_cache_lookups.add(1, &attrs);
+
+        result.value
     } else {
-        generate_body(rgen_cfg, req, &schema, cache_hash, &mut rng).await
+        generate_body(
+            rgen_cfg,
+            req,
+            &schema,
+            cache_hash,
+            &mut rng,
+            subgraph_name,
+            &state.response_generation_duration,
+        )
+        .await
+    };
+
+    // FTV1 traces are spliced in here, off the cached hot path, so cached bytes stay byte-for-byte
+    // identical. Only 200 responses carry a trace; validation-error (400) and 5xx bodies are left
+    // untouched.
+    //
+    // `splice_ftv1_trace` calls `parse_and_validate` again to recover the document, relying on it
+    // already being populated: whichever branch above produced `bytes` (cached or not) internally
+    // called `generate_body`, which calls `parse_and_validate(&req, schema, cache_hash)` with this
+    // same `cache_hash`. Since that cache is keyed purely on `cache_hash` (see its `convert`
+    // attribute), the call below is guaranteed a cache hit, not a fresh parse — this load-bearing
+    // invariant is why `splice_ftv1_trace` doesn't need to handle a populate-on-miss cost itself.
+    let bytes = match ftv1_req {
+        Some(ftv1_req) if status_code == StatusCode::OK => {
+            splice_ftv1_trace(bytes, &ftv1_req, &schema, cache_hash)
+        }
+        _ => bytes,
     };
 
     let mut resp = Response::new(Full::new(bytes).map_err(|never| match never {}).boxed());
@@ -112,7 +169,7 @@ pub async fn handle(
     let headers = resp.headers_mut();
     add_headers(&config, rgen_cfg, subgraph_name, headers, &mut rng);
 
-    Ok(resp)
+    resp
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -160,7 +217,7 @@ fn add_headers(
         }
 
         let should_insert = last_ratio
-            .is_none_or(|(numerator, denominator)| rng.random_ratio(numerator, denominator));
+            .is_none_or(|Ratio(numerator, denominator)| rng.random_ratio(numerator, denominator));
 
         if should_insert {
             headers.insert(&last_header_name, header_value);
@@ -170,7 +227,190 @@ fn add_headers(
     headers.insert("Content-Type", HeaderValue::from_static("application/json"));
 }
 
-#[cached(result = true, key = "u64", convert = "{_cache_hash}")]
+/// Rebuilds the operation's trace and splices it into the response's `extensions.ftv1` field.
+///
+/// The document comes from the `parse_and_validate` cache and the node tree from
+/// `cached_trace_shape`, so a cache hit only pays for pruning, encoding, and re-serializing. On any
+/// failure the original bytes are returned unchanged so a trace can never break an otherwise-valid
+/// response.
+fn splice_ftv1_trace(
+    bytes: Bytes,
+    req: &GraphQLRequest,
+    schema: &FederatedSchema,
+    cache_hash: u64,
+) -> Bytes {
+    let Ok(doc) = parse_and_validate(req, schema, cache_hash) else {
+        return bytes;
+    };
+    let Some(op) = primary_operation(&doc) else {
+        return bytes;
+    };
+
+    let value: Value = match serde_json::from_slice(bytes.as_ref()) {
+        Ok(value) => value,
+        Err(err) => {
+            error!(%err, "unable to parse response for ftv1 splicing");
+            return bytes;
+        }
+    };
+
+    // Cloned out before `value` is borrowed mutably below: `prune_to_response` needs a read-only
+    // view of the actual generated data, independent of the `&mut` we take to splice `extensions`
+    // in afterward.
+    let data = value.get("data").cloned().unwrap_or(Value::Null);
+
+    let mut value = value;
+    let Some(response) = value.as_object_mut() else {
+        return bytes;
+    };
+
+    let (shape, duration_ns) = cached_trace_shape(op, &doc, cache_hash);
+    let mut trace = ftv1::Trace::from_shape(shape, duration_ns);
+    // Errors before pruning: a field error drops its target key from `data` too (see
+    // `generate_response`'s `to_drop`), so pruning first would remove the node before an error could
+    // attach to it. `prune_to_response` spares error-carrying nodes for this reason.
+    if let Some(errors) = response.get("errors").and_then(Value::as_array) {
+        populate_trace_errors(&mut trace, errors);
+    }
+    if let Some(root) = trace.root.as_mut() {
+        prune_to_response(root, &[&data]);
+    }
+    let encoded = ftv1::encode_trace(&trace);
+
+    let extensions = response
+        .entry("extensions")
+        .or_insert_with(|| Value::Object(Map::new()));
+    if let Some(extensions) = extensions.as_object_mut() {
+        extensions.insert("ftv1", Value::String(encoded.into()));
+    }
+
+    match serde_json::to_vec(&value) {
+        Ok(spliced) => spliced.into(),
+        Err(err) => {
+            error!(%err, "unable to re-serialize response with ftv1 trace");
+            bytes
+        }
+    }
+}
+
+/// Populates `trace`'s error nodes from the response body's already-serialized `errors[]`, so the
+/// trace and response agree on errors by construction. Mirrors Apollo Server's rule: a path-less
+/// error (a whole-request failure) attaches to the root; a path-bearing error attaches to the
+/// `root.child` with the matching `response_name`, falling back to root if the path doesn't resolve.
+fn populate_trace_errors(trace: &mut ftv1::Trace, errors: &[Value]) {
+    let Some(root) = trace.root.as_mut() else {
+        return;
+    };
+
+    for error in errors {
+        let message = error
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let json = serde_json::to_string(error).unwrap_or_default();
+
+        let response_name = error
+            .get("path")
+            .and_then(Value::as_array)
+            .and_then(|path| path.first())
+            .and_then(Value::as_str);
+
+        let child_index = response_name.and_then(|name| {
+            root.child
+                .iter()
+                .position(|child| child.response_name == name)
+        });
+
+        let target = match child_index {
+            Some(index) => &mut root.child[index],
+            None => &mut *root,
+        };
+
+        target.error.push(ftv1::Error {
+            message,
+            location: Vec::new(),
+            time_ns: 0,
+            json,
+        });
+    }
+}
+
+/// Prunes `node`'s subtree to the response keys actually present in `data`, dropping fields whose
+/// interface/union fragment condition didn't match the concrete type apollo-smith resolved.
+/// `ftv1::collect_fields` (used to build the cached shape) is type-condition-blind, so it can include
+/// every fragment branch in the query; this walks the tree against the real response afterward and
+/// drops whatever isn't there.
+///
+/// Kept separate from `cached_trace_shape` rather than folded into `TraceBuilder`: the shape is a
+/// pure function of the query/schema and safe to cache unconditionally, but which fragment branch was
+/// taken is random, per-request data — baking it into the cached tree would leak one request's
+/// resolved types into every other request sharing its `cache_hash`.
+///
+/// Concrete (non-abstract) fields are unaffected, since apollo-smith always inserts every field it
+/// resolves, nulls included — presence alone distinguishes "wrong fragment branch" from "legitimately
+/// null". Must run after `populate_trace_errors`: a field error drops its target from `data` too, so
+/// a node already carrying an error is kept regardless of what `data` says.
+fn prune_to_response(node: &mut ftv1::Node, data: &[&Value]) {
+    node.child
+        .retain(|child| !child.error.is_empty() || field_present(data, &child.response_name));
+
+    for child in &mut node.child {
+        let child_data = child_values(data, &child.response_name);
+        prune_to_response(child, &child_data);
+    }
+}
+
+/// Whether `key` appears in at least one object among `data`. Empty `data` (an empty list, `null`,
+/// or a scalar) means there's nothing to check against, so this returns `true` (keep, don't prune) —
+/// the existing "no info" approximation, not a guess that the field is wrong.
+fn field_present(data: &[&Value], key: &str) -> bool {
+    let mut saw_object = false;
+    for value in data {
+        if let Some(object) = value.as_object() {
+            saw_object = true;
+            if object.contains_key(key) {
+                return true;
+            }
+        }
+    }
+
+    !saw_object
+}
+
+/// Collects `key`'s value out of every object in `data`, flattening one level of array so a list
+/// field's elements (merged into one child set by `ftv1::TraceBuilder`) feed the next level's
+/// presence check together.
+fn child_values<'a>(data: &[&'a Value], key: &str) -> Vec<&'a Value> {
+    let mut out = Vec::new();
+    for value in data {
+        let Some(child) = value.as_object().and_then(|object| object.get(key)) else {
+            continue;
+        };
+        match child.as_array() {
+            Some(items) => out.extend(items.iter()),
+            None => out.push(child),
+        }
+    }
+
+    out
+}
+
+/// The operation a request executes: the first operation defined in the document.
+///
+/// Both response generation (`generate_body`) and FTV1 trace generation (`splice_ftv1_trace`) call
+/// this, so they're guaranteed to agree on which operation ran rather than merely computing the same
+/// thing independently.
+fn primary_operation(doc: &ExecutableDocument) -> Option<&Node<Operation>> {
+    doc.operations.iter().next()
+}
+
+#[cached(
+    name = "PARSE_AND_VALIDATE_CACHE",
+    result = true,
+    key = "u64",
+    convert = "{_cache_hash}"
+)]
 fn parse_and_validate(
     req: &GraphQLRequest,
     schema: &FederatedSchema,
@@ -181,41 +421,82 @@ fn parse_and_validate(
     ExecutableDocument::parse_and_validate(schema, &req.query, op_name)
 }
 
-#[tracing::instrument(skip(req, schema, rng))]
-#[cached(key = "u64", convert = "{cache_hash}")]
+/// Builds (or reuses) the FTV1 node tree for an operation, keyed on the same `cache_hash` as the
+/// response bytes and the parsed document.
+///
+/// Unlike the response bytes, this is safe to cache unconditionally — whether or not
+/// `cache_responses` is enabled. `Trace::build_shape` reads only `op`/`doc`, which are already
+/// captured by `cache_hash`, and never touches RNG state or generated response content, so the same
+/// `cache_hash` always produces the same shape. What varies per request — errors, and the wall-clock
+/// window from `Trace::from_shape` — is applied by the caller afterward, outside this cache.
+///
+/// Same memory caveat as `parse_and_validate`/`into_response_bytes_and_status_code`: entries are
+/// never invalidated, so hot-reloading the schema/config repeatedly will grow this cache over time.
+#[cached(
+    name = "CACHED_TRACE_SHAPE_CACHE",
+    key = "u64",
+    convert = "{_cache_hash}"
+)]
+fn cached_trace_shape(
+    op: &Node<Operation>,
+    doc: &ExecutableDocument,
+    _cache_hash: u64,
+) -> (ftv1::Node, u64) {
+    ftv1::Trace::build_shape(op, doc)
+}
+
+#[apollo_opentelemetry::traced]
+#[cached(
+    name = "RESPONSE_BYTES_CACHE",
+    key = "u64",
+    convert = "{cache_hash}",
+    with_cached_flag = true
+)]
 async fn into_response_bytes_and_status_code(
     cfg: &ResponseGenerationConfig,
     req: GraphQLRequest,
     schema: &FederatedSchema,
     cache_hash: u64,
     rng: &mut StdRng,
-) -> (Bytes, StatusCode) {
-    generate_body(cfg, req, schema, cache_hash, rng).await
+    subgraph_name: Option<&str>,
+    histogram: &Histogram<f64>,
+) -> Return<(Bytes, StatusCode)> {
+    Return::new(generate_body(cfg, req, schema, cache_hash, rng, subgraph_name, histogram).await)
 }
 
-#[tracing::instrument(skip(req, schema, rng))]
+#[apollo_opentelemetry::traced]
 async fn generate_body(
     cfg: &ResponseGenerationConfig,
     req: GraphQLRequest,
     schema: &FederatedSchema,
     cache_hash: u64,
     rng: &mut StdRng,
+    subgraph_name: Option<&str>,
+    histogram: &Histogram<f64>,
 ) -> (Bytes, StatusCode) {
+    // Guard records elapsed time on drop (any return path, or if this future is cancelled
+    // mid-poll), so it must live for the whole function — hence the leading underscore rather
+    // than being dropped explicitly.
+    let mut attrs = Vec::new();
+    push_subgraph_attr(&mut attrs, subgraph_name);
+    let _duration = histogram.record_duration_on_drop(attrs);
+
     debug!(%cache_hash, req.operation_name, "handling graphql request");
     trace!(variables=?req.variables, "request variables");
 
     let doc = match parse_and_validate(&req, schema, cache_hash) {
         Ok(doc) => doc,
         Err(err) => {
-            let errs: Vec<_> = err.errors.iter().map(|d| d.to_json()).collect();
-            error!(?errs, query=%req.query, "invalid graphql query");
-            let bytes = serde_json::to_vec(&json!({ "data": Value::Null, "errors": errs }))
+            let errors: Vec<_> = err.errors.iter().map(|d| d.to_json()).collect();
+            error!(?errors, query=%req.query, "invalid graphql query");
+            let bytes = serde_json::to_vec(&json!({ "data": Value::Null, "errors": errors }))
                 .unwrap_or_default();
+
             return (bytes.into(), StatusCode::BAD_REQUEST);
         }
     };
 
-    let op = doc.operations.iter().next().unwrap();
+    let op = primary_operation(&doc).unwrap();
     let op_name = op.name.as_ref().map(|name| name.as_str());
 
     debug!(
@@ -231,10 +512,7 @@ async fn generate_body(
                 Ok(resp) => resp,
                 Err(err) => {
                     error!(%err, "unable to generate response");
-                    return (
-                        Bytes::from("unable to generate response"),
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                    );
+                    return err.to_response();
                 }
             }
         }
@@ -242,22 +520,68 @@ async fn generate_body(
         // Not currently supporting mutations or subscriptions
         op_type => {
             error!("received {op_type} request: not implemented");
-            return (
-                Bytes::from("not implemented"),
-                StatusCode::INTERNAL_SERVER_ERROR,
-            );
+            return HandlerError::NotImplemented {
+                operation_type: op_type.to_string(),
+            }
+            .to_response();
         }
     };
 
     match serde_json::to_vec(&resp) {
         Ok(bytes) => (bytes.into(), StatusCode::OK),
-        Err(err) => {
-            error!(%err, "unable to serialize response");
-            (
-                Bytes::from(err.to_string().into_bytes()),
-                StatusCode::INTERNAL_SERVER_ERROR,
-            )
+        Err(source) => {
+            error!(%source, "unable to serialize response");
+            HandlerError::SerializationFailed { source }.to_response()
         }
+    }
+}
+
+/// Appends a `subgraph.name` attribute if `subgraph_name` is known, so metrics recorded for a
+/// given subgraph's traffic can be told apart from another's.
+fn push_subgraph_attr(attrs: &mut Vec<KeyValue>, subgraph_name: Option<&str>) {
+    if let Some(name) = subgraph_name {
+        attrs.push(KeyValue::new("subgraph.name", name.to_string()));
+    }
+}
+
+/// Current entry count of each of this module's `#[cached]` caches, paired with the `cache` name
+/// it should be tagged with when reported.
+pub(crate) fn cache_sizes() -> Vec<(&'static str, i64)> {
+    let mut sizes = vec![
+        (
+            "parse_and_validate",
+            PARSE_AND_VALIDATE_CACHE.lock().cache_size() as i64,
+        ),
+        (
+            "cached_trace_shape",
+            CACHED_TRACE_SHAPE_CACHE.lock().cache_size() as i64,
+        ),
+    ];
+
+    // This one's function is async, so its generated cache uses an async (tokio) mutex rather
+    // than the sync one the two caches above get — no blocking `.lock()` available here. Losing
+    // the race just omits this cache from this tick's sample; the next tick tries again, and the
+    // lock is only ever held for the moment of an actual cache read/write.
+    if let Ok(cache) = RESPONSE_BYTES_CACHE.try_lock() {
+        sizes.push((
+            "into_response_bytes_and_status_code",
+            cache.cache_size() as i64,
+        ));
+    }
+
+    sizes
+}
+
+/// Converts an `apollo_compiler` [request error](https://spec.graphql.org/draft/#sec-Errors.Request-errors)
+/// — reported identically by `coerce_variable_values` and `partial_execute` — into a
+/// [`HandlerError::RequestError`]. `to_graphql_error` already resolves the error's `SourceSpan`
+/// into a line/column via `sources`, so `locations` needs no further work here.
+fn request_error(err: &RequestError, sources: &SourceMap) -> HandlerError {
+    let graphql_err = err.to_graphql_error(sources);
+
+    HandlerError::RequestError {
+        message: graphql_err.message,
+        locations: serde_json::to_value(&graphql_err.locations).unwrap_or_default(),
     }
 }
 
@@ -268,16 +592,22 @@ fn generate_response(
     schema: &FederatedSchema,
     variables: &JsonMap,
     rng: &mut StdRng,
-) -> anyhow::Result<Value> {
+) -> Result<Value, HandlerError> {
     let op = match doc.operations.get(op_name) {
         Ok(op) => op,
         Err(_) => return Ok(json!({ "data": null })),
     };
 
-    if let Some((numerator, denominator)) = cfg.graphql_errors.request_error_ratio
+    if let Some(Ratio(numerator, denominator)) = cfg.graphql_errors.request_error_ratio
         && rng.random_ratio(numerator, denominator)
     {
-        return Ok(json!({ "data": null, "errors": [{ "message": "Request error simulated" }]}));
+        return Ok(json!({
+            "data": null,
+            "errors": [{
+                "message": "Request error simulated",
+                "extensions": { "code": "INTERNAL_SERVER_ERROR" },
+            }],
+        }));
     }
 
     // Short-circuit introspection responses if a request is *only* introspection. This does mean that requests
@@ -286,16 +616,20 @@ fn generate_response(
     // data being requested, but if we want to make this fully spec-compliant in the future we will need to merge
     // the result of `partial_execute` with the random data generated on every query (which would be costlier).
     if op.is_introspection(doc) {
-        return apollo_compiler::introspection::partial_execute(
+        let variable_values = coerce_variable_values(schema, op, variables)
+            .map_err(|err| request_error(&err, &doc.sources))?;
+
+        let result = apollo_compiler::introspection::partial_execute(
             schema,
             &schema.implementers_map(),
             doc,
             op,
-            &coerce_variable_values(schema, op, variables)
-                .map_err(|err| anyhow!("{}", err.message()))?,
+            &variable_values,
         )
-        .map_err(|err| anyhow!("{}", err.message()))
-        .and_then(|result| serde_json_bytes::to_value(result).map_err(|err| anyhow!("{}", err)));
+        .map_err(|err| request_error(&err, &doc.sources))?;
+
+        return serde_json_bytes::to_value(result)
+            .map_err(|source| HandlerError::SerializationFailed { source });
     }
 
     let mut rng_provider = RandProvider(StdRng::from_rng(&mut *rng));
@@ -309,7 +643,7 @@ fn generate_response(
             },
         );
 
-    if let Some((numerator, denominator)) = cfg.null_ratio {
+    if let Some(Ratio(numerator, denominator)) = cfg.null_ratio {
         builder = builder.with_null_ratio(numerator, denominator);
     }
 
@@ -323,11 +657,11 @@ fn generate_response(
 
     builder = builder.with_operation_name(op_name);
 
-    let data = builder.build_data().map_err(|err| anyhow!("{}", err))?;
+    let data = builder.build_data()?;
 
     // Select a random number of top-level fields to "fail" if we are going to have field errors. For the sake of
     // simplicity and performance, we won't traverse deeper into the response object.
-    if let Some((numerator, denominator)) = cfg.graphql_errors.field_error_ratio
+    if let Some(Ratio(numerator, denominator)) = cfg.graphql_errors.field_error_ratio
         && rng.random_ratio(numerator, denominator)
     {
         let mut data = data.as_object().cloned().unwrap_or_default();
@@ -342,7 +676,8 @@ fn generate_response(
             .map(|key| {
                 json!({
                     "message": "Field error simulated",
-                    "path": [key]
+                    "path": [key],
+                    "extensions": { "code": "INTERNAL_SERVER_ERROR" },
                 })
             })
             .collect();
@@ -423,9 +758,14 @@ fn ast_value_to_json(value: &apollo_compiler::ast::Value, variables: &JsonMap) -
     })
 }
 
-pub type Ratio = (u32, u32);
+/// A `(numerator, denominator)` ratio, e.g. `[1, 2]` for "1 in 2".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct Ratio(pub u32, pub u32);
 
-#[derive(Debug, Default, Clone, Hash, Serialize, Deserialize)]
+impl Validate for Ratio {}
+
+#[configuration]
+#[derive(Hash, Serialize)]
 pub struct GraphQLErrorConfig {
     /// The ratio of GraphQL requests that should be responded to with a request error and no data.
     ///
@@ -442,20 +782,20 @@ pub struct GraphQLErrorConfig {
     pub field_error_ratio: Option<Ratio>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Hash)]
+#[configuration]
+#[derive(Hash, Serialize)]
 pub struct ResponseGenerationConfig {
-    #[serde(default = "default_scalar_config")]
+    #[config(default = default_scalar_config(), skip_validate)]
     pub scalars: BTreeMap<String, ScalarGenerator>,
-    #[serde(default = "default_array_size")]
+    #[config(default = default_array_size())]
     pub array: ArraySize,
-    #[serde(default = "default_null_ratio")]
+    #[config(default = default_null_ratio())]
     pub null_ratio: Option<Ratio>,
-    #[serde(default)]
-    pub header_ratio: BTreeMap<String, (u32, u32)>,
-    #[serde(default)]
+    #[config(skip_validate)]
+    pub header_ratio: BTreeMap<String, Ratio>,
     pub http_error_ratio: Option<Ratio>,
-    #[serde(default)]
     pub graphql_errors: GraphQLErrorConfig,
+    pub ftv1: Option<bool>,
 }
 
 impl ResponseGenerationConfig {
@@ -465,19 +805,6 @@ impl ResponseGenerationConfig {
         let default = default_scalar_config();
         let provided = mem::replace(&mut self.scalars, default);
         self.scalars.extend(provided);
-    }
-}
-
-impl Default for ResponseGenerationConfig {
-    fn default() -> Self {
-        Self {
-            scalars: default_scalar_config(),
-            array: default_array_size(),
-            null_ratio: default_null_ratio(),
-            header_ratio: BTreeMap::new(),
-            graphql_errors: GraphQLErrorConfig::default(),
-            http_error_ratio: None,
-        }
     }
 }
 
@@ -513,15 +840,20 @@ fn default_array_size() -> ArraySize {
 }
 
 fn default_null_ratio() -> Option<Ratio> {
-    Some((1, 2))
+    Some(Ratio(1, 2))
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Hash)]
+// Kept as a hand-rolled (non-`#[configuration]`) type: `#[configuration]` enums are always
+// externally tagged by variant name (e.g. `{int: {min: 0, max: 100}}`), with no way to opt into
+// the internally-tagged `{type: int, min: 0, max: 100}` shape configured below
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Hash, JsonSchema)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ScalarGenerator {
     Bool,
     Float {
+        #[schemars(with = "f64")]
         min: OrderedFloat<f64>,
+        #[schemars(with = "f64")]
         max: OrderedFloat<f64>,
     },
     Int {
@@ -596,9 +928,12 @@ impl<R: RandomProvider> Generator<R> for SdlOverride {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Hash)]
+#[configuration]
+#[derive(Copy, Hash, Serialize)]
 pub struct ArraySize {
+    #[config(required)]
     pub min_length: usize,
+    #[config(required)]
     pub max_length: usize,
 }
 
@@ -695,6 +1030,110 @@ mod tests {
 
         let sdl = schema_obj.get("sdl").unwrap().as_str().unwrap();
         assert_eq!(supergraph, sdl);
+
+        Ok(())
+    }
+
+    #[test]
+    fn cached_trace_shape_reuses_cache_hash_regardless_of_document() -> anyhow::Result<()> {
+        let supergraph = include_str!("../../tests/data/schema.graphql");
+        let schema = FederatedSchema::parse_string(supergraph, "../../tests/data/schema.graphql")?;
+
+        let doc_a =
+            ExecutableDocument::parse_and_validate(&schema, r#"{ posts { title } }"#, "a.graphql")
+                .unwrap();
+        let doc_b = ExecutableDocument::parse_and_validate(
+            &schema,
+            r#"{ posts { title views } }"#,
+            "b.graphql",
+        )
+        .unwrap();
+        let op_a = primary_operation(&doc_a).unwrap();
+        let op_b = primary_operation(&doc_b).unwrap();
+
+        // A cache_hash value no other test/request could plausibly compute (real ones come from
+        // hashing a query/config/schema), so this test can't collide with `cached_trace_shape`'s
+        // process-global cache.
+        const CACHE_HASH: u64 = 0x6f6c645f73686170;
+
+        let (shape_a, _) = cached_trace_shape(op_a, &doc_a, CACHE_HASH);
+        // Same cache_hash, a document that would build a different shape (`title` *and* `views`
+        // instead of just `title`) if this weren't cached.
+        let (shape_b, _) = cached_trace_shape(op_b, &doc_b, CACHE_HASH);
+
+        assert_eq!(
+            shape_a, shape_b,
+            "same cache_hash should reuse the first-built shape rather than rebuilding from doc_b"
+        );
+        assert_eq!(shape_b.child.len(), 1);
+        let posts = &shape_b.child[0];
+        assert_eq!(
+            posts.child.len(),
+            1,
+            "shape should still reflect doc_a's `{{ posts {{ title }} }}`, not doc_b's extra `views`"
+        );
+        assert_eq!(posts.child[0].response_name, "title");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cache_sizes_grows_when_a_new_cache_hash_is_inserted() -> anyhow::Result<()> {
+        let supergraph = include_str!("../../tests/data/schema.graphql");
+        let schema = FederatedSchema::parse_string(supergraph, "../../tests/data/schema.graphql")?;
+        let req = GraphQLRequest {
+            query: "{ posts { title } }".to_string(),
+            operation_name: None,
+            variables: JsonMap::new(),
+        };
+
+        // An improbable cache_hash no other test/request could plausibly compute (same rationale
+        // as `cached_trace_shape_reuses_cache_hash_regardless_of_document`), so this test's
+        // inserts can't collide with any other test's or request's. Shared between both calls
+        // below deliberately: `into_response_bytes_and_status_code` calls `parse_and_validate`
+        // internally with whatever `cache_hash` it's given, so reusing the same one here means
+        // that internal call is a hit against the entry the first call already inserted, rather
+        // than a second, separate insert this test would otherwise have to account for.
+        const CACHE_HASH: u64 = 0x63616368655f7331;
+
+        let before = cache_sizes();
+
+        parse_and_validate(&req, &schema, CACHE_HASH).unwrap();
+
+        let histogram = opentelemetry::global::meter_provider()
+            .meter("test")
+            .f64_histogram("test.duration")
+            .build();
+        into_response_bytes_and_status_code(
+            &ResponseGenerationConfig::default(),
+            req,
+            &schema,
+            CACHE_HASH,
+            &mut StdRng::seed_from_u64(0),
+            None,
+            &histogram,
+        )
+        .await;
+
+        let after = cache_sizes();
+        let size_of = |sizes: &[(&str, i64)], cache: &str| {
+            sizes
+                .iter()
+                .find(|(name, _)| *name == cache)
+                .map(|(_, size)| *size)
+                .unwrap_or_else(|| panic!("no `{cache}` entry in cache_sizes()"))
+        };
+
+        assert_eq!(
+            size_of(&after, "parse_and_validate"),
+            size_of(&before, "parse_and_validate") + 1,
+            "parse_and_validate's cache should have grown by exactly the one entry just inserted"
+        );
+        assert_eq!(
+            size_of(&after, "into_response_bytes_and_status_code"),
+            size_of(&before, "into_response_bytes_and_status_code") + 1,
+            "the response-bytes cache should have grown by exactly the one entry just inserted"
+        );
 
         Ok(())
     }

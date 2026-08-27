@@ -20,7 +20,7 @@ fn configured_seed_is_reproducible() -> anyhow::Result<()> {
             config: Some(pkg_path("tests/data/config/seed.yaml")),
             schema: pkg_path("tests/data/schema.graphql"),
         };
-        let (_, state) = args.init()?;
+        let (_, state, _) = args.init()?;
         Ok(state.rng.next().random_range(0..u32::MAX))
     };
 
@@ -36,7 +36,7 @@ fn unconfigured_seed_falls_back_to_os_rng() -> anyhow::Result<()> {
         config: None,
         schema: pkg_path("tests/data/schema.graphql"),
     };
-    let (_, state) = args.init()?;
+    let (_, state, _) = args.init()?;
 
     assert!(matches!(state.rng, RngSource::Os));
     Ok(())

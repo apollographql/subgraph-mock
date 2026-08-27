@@ -1,0 +1,1 @@
+{"query":"{ users { id name email bio address { city country } posts { id title views } } }","variables":{}}

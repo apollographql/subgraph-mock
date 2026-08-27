@@ -65,7 +65,7 @@ pub fn initialize(
             .map(|name| PathBuf::from(format!("{pkg_root}/tests/data/config/{name}"))),
         schema: schema_pathbuf(schema_file_name),
     };
-    let (port, state) = args.init()?;
+    let (port, state, _telemetry_config) = args.init()?;
 
     Ok((
         port,
@@ -152,13 +152,14 @@ pub async fn send_request<T>(
 where
     T: Borrow<Option<String>>,
 {
-    send_request_with_variables(
+    send_request_with_variables_and_headers(
         operation_def,
         JsonMap::new(),
         schema_name,
         state,
         subgraph_name,
         validate,
+        &[],
     )
     .await
 }
@@ -175,6 +176,58 @@ pub async fn send_request_with_variables<T>(
 where
     T: Borrow<Option<String>>,
 {
+    send_request_with_variables_and_headers(
+        operation_def,
+        variables,
+        schema_name,
+        state,
+        subgraph_name,
+        validate,
+        &[],
+    )
+    .await
+}
+
+/// Like [send_request], but sets the provided `headers` (name/value pairs) on the request. Used to
+/// exercise header-driven behavior such as FTV1 trace emission.
+pub async fn send_request_with_headers<T>(
+    operation_def: String,
+    schema_name: Option<String>,
+    state: Arc<State>,
+    subgraph_name: T,
+    validate: bool,
+    headers: &[(&str, &str)],
+) -> anyhow::Result<ByteResponse>
+where
+    T: Borrow<Option<String>>,
+{
+    send_request_with_variables_and_headers(
+        operation_def,
+        JsonMap::new(),
+        schema_name,
+        state,
+        subgraph_name,
+        validate,
+        headers,
+    )
+    .await
+}
+
+/// The shared implementation behind [`send_request`], [`send_request_with_variables`] and
+/// [`send_request_with_headers`].
+#[allow(clippy::too_many_arguments)]
+pub async fn send_request_with_variables_and_headers<T>(
+    operation_def: String,
+    variables: JsonMap,
+    schema_name: Option<String>,
+    state: Arc<State>,
+    subgraph_name: T,
+    validate: bool,
+    headers: &[(&str, &str)],
+) -> anyhow::Result<ByteResponse>
+where
+    T: Borrow<Option<String>>,
+{
     let uri = match subgraph_name.borrow() {
         Some(name) => format!("/{name}"),
         None => "/".to_owned(),
@@ -186,10 +239,11 @@ where
         variables,
     })?;
 
-    let req = Request::builder()
-        .method("POST")
-        .uri(uri)
-        .body(Full::<Bytes>::from(body))?;
+    let mut builder = Request::builder().method("POST").uri(uri);
+    for (name, value) in headers {
+        builder = builder.header(*name, *value);
+    }
+    let req = builder.body(Full::<Bytes>::from(body))?;
 
     // Rip the body out, validate it, then repackage it to return
     let (parts, body) = handle_request(req, state).await?.into_parts();

@@ -1,39 +1,55 @@
 use crate::{
+    error::{Error, Result},
     handle::graphql::ResponseGenerationConfig,
     latency::{LatencyConfig, LatencyGenerator},
+    state::health::HealthConfig,
 };
-use anyhow::Error;
+use apollo_configuration::{ParseYamlOptions, configuration, expansion::EnvVariables};
+use apollo_http_server_telemetry::HttpServerTelemetryConfig;
+use apollo_opentelemetry::OpenTelemetryConfig;
 use hyper::{
     HeaderMap,
     header::{HeaderName, HeaderValue},
 };
-use serde::{Deserialize, Serialize};
 use serde_json_bytes::serde_json;
 use serde_yaml::Value;
-use std::collections::HashMap;
+use std::{collections::HashMap, fs, path::Path};
 use tracing::{info, warn};
 
 /// Allowed in the YAML, but not represented in the [BaseConfig] struct as we
 /// neither want nor need that data structure to be recursive.
 const SUBGRAPH_OVERRIDES_KEY: &str = "subgraph_overrides";
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+type BaseConfigParts = (
+    u16,
+    bool,
+    LatencyGenerator,
+    HeaderMap<HeaderValue>,
+    ResponseGenerationConfig,
+    HealthConfig,
+    TelemetryConfig,
+);
+
+#[configuration]
 struct BaseConfig {
-    #[serde(default = "default_port")]
+    #[config(default = default_port())]
     pub port: u16,
     /// Seed for the server's random number generator. Omit for non-reproducible
     /// (OS-sourced) randomness. Global only: setting this in a subgraph override
     /// has no effect, since all subgraphs share a single RNG.
-    #[serde(default)]
     pub seed: Option<u64>,
-    #[serde(default)]
     pub headers: HashMap<String, String>,
-    #[serde(default)]
+    #[config(default = LatencyConfig::default_with_sine())]
     pub latency: LatencyConfig,
-    #[serde(default)]
     pub response_generation: ResponseGenerationConfig,
-    #[serde(default = "default_cache_responses")]
+    #[config(default = default_cache_responses())]
     pub cache_responses: bool,
+    pub telemetry: TelemetrySection,
+    /// Single combined health endpoint (collapsing liveness/readiness/startup into one
+    /// path, like the router's own health_check - see data/router-config.yaml). Global
+    /// only: setting this in a subgraph override has no effect, since there is only one
+    /// process to probe.
+    pub health: HealthConfig,
 }
 
 pub fn default_port() -> u16 {
@@ -44,34 +60,13 @@ fn default_cache_responses() -> bool {
     true
 }
 
-impl Default for BaseConfig {
-    fn default() -> Self {
-        Self {
-            port: default_port(),
-            seed: Default::default(),
-            headers: Default::default(),
-            latency: Default::default(),
-            response_generation: Default::default(),
-            cache_responses: default_cache_responses(),
-        }
-    }
-}
-
 impl BaseConfig {
-    pub fn into_parts(
-        self,
-    ) -> anyhow::Result<(
-        u16,
-        bool,
-        LatencyGenerator,
-        HeaderMap<HeaderValue>,
-        ResponseGenerationConfig,
-    )> {
+    pub fn into_parts(self) -> Result<BaseConfigParts> {
         info!(config=%serde_json::to_string(&self.latency).unwrap(), "latency generation");
         let latency_generator = LatencyGenerator::new(self.latency);
 
         info!(headers=%serde_json::to_string(&self.headers).unwrap(), "additional headers");
-        let additional_headers: anyhow::Result<HeaderMap<HeaderValue>> = self
+        let additional_headers: Result<HeaderMap<HeaderValue>> = self
             .headers
             .into_iter()
             .map(|(k, v)| Ok((HeaderName::try_from(&k)?, HeaderValue::try_from(&v)?)))
@@ -88,8 +83,48 @@ impl BaseConfig {
             latency_generator,
             additional_headers?,
             response_generation,
+            self.health,
+            self.telemetry.resolve(),
         ))
     }
+}
+
+#[configuration]
+struct TelemetrySection {
+    otel: Option<OpenTelemetryConfig>,
+    http: Option<HttpServerTelemetryConfig>,
+}
+
+impl TelemetrySection {
+    fn resolve(self) -> TelemetryConfig {
+        TelemetryConfig {
+            otel: self.otel.unwrap_or_else(disabled_open_telemetry),
+            http: self.http.unwrap_or_else(default_http_telemetry),
+        }
+    }
+}
+
+fn disabled_open_telemetry() -> OpenTelemetryConfig {
+    apollo_configuration::parse_yaml(
+        "disabled: true\n",
+        &ParseYamlOptions::default().variables(EnvVariables),
+    )
+    .expect("hand-written literal is valid YAML")
+}
+
+fn default_http_telemetry() -> HttpServerTelemetryConfig {
+    apollo_configuration::parse_yaml(
+        "spans:\n  request_body_size: true\n  response_body_size: true\n\
+         metrics:\n  request_body_size: true\n  response_body_size: true\n",
+        &ParseYamlOptions::default().variables(EnvVariables),
+    )
+    .expect("hand-written literal is valid YAML")
+}
+
+#[derive(Debug, Clone)]
+pub struct TelemetryConfig {
+    pub otel: OpenTelemetryConfig,
+    pub http: HttpServerTelemetryConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -99,6 +134,9 @@ pub struct Config {
     pub response_generation: ResponseGenerationConfig,
     pub cache_responses: bool,
     pub subgraph_overrides: SubgraphOverrides,
+    /// Global only: there is no per-subgraph equivalent, since there is only one
+    /// process (and one health endpoint) to report on.
+    pub health: HealthConfig,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -113,20 +151,28 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             headers: Default::default(),
-            latency_generator: LatencyGenerator::new(LatencyConfig::default()),
+            latency_generator: LatencyGenerator::new(LatencyConfig::default_with_sine()),
             response_generation: Default::default(),
             cache_responses: default_cache_responses(),
             subgraph_overrides: Default::default(),
+            health: Default::default(),
         }
     }
 }
 
 impl Config {
-    /// Parses a YAML file into a resolved port, RNG seed, and [Config]
-    pub fn parse_yaml(mut base: Value) -> anyhow::Result<(u16, Option<u64>, Config)> {
-        let mapping = base
-            .as_mapping_mut()
-            .ok_or_else(|| Error::msg("config file must be a mapping"))?;
+    /// Reads and parses a YAML config file into a resolved port, RNG seed, [Config], and
+    /// [TelemetryConfig]
+    pub fn from_file(path: &Path) -> Result<(u16, Option<u64>, Config, TelemetryConfig)> {
+        let bytes = fs::read(path)?;
+        let value = serde_yaml::from_slice(&bytes)?;
+
+        Self::parse_yaml(value)
+    }
+
+    /// Parses a YAML file into a resolved port, RNG seed, [Config], and [TelemetryConfig]
+    pub fn parse_yaml(mut base: Value) -> Result<(u16, Option<u64>, Config, TelemetryConfig)> {
+        let mapping = base.as_mapping_mut().ok_or(Error::NotAMapping)?;
 
         let mut subgraph_cache_responses = HashMap::new();
         let mut subgraph_headers = HashMap::new();
@@ -138,10 +184,13 @@ impl Config {
                 Value::Mapping(mapping) => {
                     for (subgraph_name, subgraph_override) in mapping {
                         let mut subgraph_config = base.clone();
+                        let subgraph_name: String = serde_yaml::from_value(subgraph_name)?;
 
-                        let override_mapping = subgraph_override
-                            .as_mapping()
-                            .ok_or_else(|| Error::msg("subgraph override must be a mapping"))?;
+                        let override_mapping = subgraph_override.as_mapping().ok_or_else(|| {
+                            Error::OverrideNotAMapping {
+                                subgraph: subgraph_name.clone(),
+                            }
+                        })?;
 
                         if override_mapping.contains_key("port") {
                             warn!("port overrides for subgraphs will be ignored")
@@ -151,9 +200,20 @@ impl Config {
                             warn!("seed overrides for subgraphs will be ignored")
                         }
 
+                        if override_mapping.contains_key("telemetry") {
+                            warn!("telemetry overrides for subgraphs will be ignored")
+                        }
+
+                        if override_mapping.contains_key("health") {
+                            warn!("health overrides for subgraphs will be ignored")
+                        }
+
                         merge_yaml(subgraph_override, &mut subgraph_config);
-                        let parsed_config: BaseConfig = serde_yaml::from_value(subgraph_config)?;
-                        let subgraph_name: String = serde_yaml::from_value(subgraph_name)?;
+                        let subgraph_config_text = serde_yaml::to_string(&subgraph_config)?;
+                        let parsed_config: BaseConfig = apollo_configuration::parse_yaml(
+                            &subgraph_config_text,
+                            &ParseYamlOptions::default().variables(EnvVariables),
+                        )?;
 
                         info!("generating customized config for {}", subgraph_name);
                         let (
@@ -162,6 +222,8 @@ impl Config {
                             latency_generator,
                             headers,
                             response_generation,
+                            _health,
+                            _telemetry_config,
                         ) = parsed_config.into_parts()?;
 
                         subgraph_cache_responses.insert(subgraph_name.clone(), cache_responses);
@@ -172,16 +234,27 @@ impl Config {
                             .insert(subgraph_name, response_generation);
                     }
                 }
-                _ => return Err(Error::msg("config file must be a mapping")),
+                _ => return Err(Error::NotAMapping),
             }
         }
 
-        let base_config = serde_yaml::from_value::<BaseConfig>(base)?;
+        let base_config_text = serde_yaml::to_string(&base)?;
+        let base_config: BaseConfig = apollo_configuration::parse_yaml(
+            &base_config_text,
+            &ParseYamlOptions::default().variables(EnvVariables),
+        )?;
         let seed = base_config.seed;
         info!(seed = ?seed, "rng seed");
 
-        let (port, cache_responses, latency, headers, response_generation) =
-            base_config.into_parts()?;
+        let (
+            port,
+            cache_responses,
+            latency,
+            headers,
+            response_generation,
+            health,
+            telemetry_config,
+        ) = base_config.into_parts()?;
 
         Ok((
             port,
@@ -197,7 +270,9 @@ impl Config {
                     response_generation: subgraph_response_generation_configs,
                     cache_responses: subgraph_cache_responses,
                 },
+                health,
             },
+            telemetry_config,
         ))
     }
 }

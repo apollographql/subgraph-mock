@@ -1,0 +1,75 @@
+name: Subgraph mock router integration
+description: |
+  Docker compose environment for router/subgraph-mock integration testing.
+
+  This environment runs:
+  - Router with the specified version
+  - subgraph-mock, serving the whole supergraph
+  - Mock Studio, standing in for GraphOS ingest (FTV1/usage-reporting - see the router's own
+    experimental_otlp_endpoint in data/router-config.yaml, unrelated to the OTel Collector
+    metrics path below)
+
+  Logs for all services are collected. subgraph-mock's `rtf.io/otel: true` label
+  (data/docker-compose.yaml) makes its own OTel HTTP metrics reach the RTF Orchestrator's OTel
+  Collector, and from there Prometheus (see output_collection below) - but only when this test
+  plan runs via `rtf rep ci-run`; it's a no-op under plain `rtf run` (see
+  data/subgraph-config.yaml's telemetry.otel section for why).
+
+variable_definitions:
+  - name: router_image
+    description: "The Docker image path for the router minus the tag"
+    default: "ghcr.io/apollographql/router"
+
+  - name: router_tag
+    description: "The router docker image tag being tested"
+
+  - name: subgraph_image
+    description: "The subgraph docker image:tag"
+    default: "us-central1-docker.pkg.dev/platform-cross-environment/apollo-private-docker/subgraph-mock:edge"
+
+project_name: "subgraph-mock-router"
+
+compose_files:
+  - name: compose.yaml
+    kind: relative_path
+    path: data/docker-compose.yaml
+
+file_providers:
+  - name: subgraph-config.yaml
+    env_var: SUBGRAPH_CONFIG_FILE
+    kind: relative_path
+    path: data/subgraph-config.yaml
+
+  - name: router-config.yaml
+    env_var: ROUTER_CONFIG
+    kind: relative_path
+    path: data/router-config.yaml
+
+  - name: supergraph.graphql
+    env_var: SUPERGRAPH_SCHEMA
+    kind: relative_path
+    path: ../../tests/data/schema.graphql
+
+  - name: license.jwt
+    env_var: LICENSE_FILE
+    kind: offline_graphos_license
+    graph_id: "starstuff"
+
+env_vars:
+  # Router configuration
+  ROUTER_IMAGE: "{{ router_image }}"
+  ROUTER_TAG: "{{ router_tag }}"
+
+  # Subgraph configuration
+  SUBGRAPH_IMAGE: "{{ subgraph_image }}"
+
+# Observational only (no threshold/expect field exists in this mechanism reports whether
+# subgraph-mock's OTel metrics actually made it through the collector to Prometheus. Only
+# produces data under `rtf rep ci-run`; under plain `rtf run` there's no Orchestrator-managed
+# Prometheus for this to query at all.
+output_collection:
+  prometheus:
+    - name: subgraph-request-rate
+      step: 15s
+      query: |
+        sum(rate(http_server_request_duration_seconds_count{k8s_pod_name=~"subgraph.*"}[1m]))

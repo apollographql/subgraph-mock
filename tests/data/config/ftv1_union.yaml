@@ -1,0 +1,7 @@
+cache_responses: false
+response_generation:
+  ftv1: true
+  null_ratio: [0, 1]
+  array:
+    min_length: 4
+    max_length: 6
