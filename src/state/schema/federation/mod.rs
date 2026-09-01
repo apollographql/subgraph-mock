@@ -6,7 +6,7 @@ use apollo_compiler::{
     },
     collections::IndexSet,
     name,
-    schema::{Component, ComponentName, ComponentOrigin, ExtendedType, ObjectType, UnionType},
+    schema::{ExtendedType, ObjectType, UnionType},
 };
 use tracing::warn;
 
@@ -102,14 +102,11 @@ pub fn patch_schema(
     federation_type: FederationType,
 ) -> Result<(), SchemaError> {
     // Resolve federated object types for the _Entity union.
-    let members: IndexSet<ComponentName> = schema
+    let members: IndexSet<Node<Name>> = schema
         .types
         .iter()
         .filter(|(_, ty)| ty.is_object() && is_federated_type(schema, ty))
-        .map(|(name, _)| ComponentName {
-            origin: ComponentOrigin::Definition,
-            name: name.clone(),
-        })
+        .map(|(name, _)| Node::new(name.clone()))
         .collect();
 
     let has_federated_members = !members.is_empty();
@@ -176,7 +173,7 @@ pub fn patch_schema(
     if has_federated_members {
         query_root.make_mut().fields.insert(
             name!("_entities"),
-            Component::new(FieldDefinition {
+            Node::new(FieldDefinition {
                 description: None,
                 name: name!("_entities"),
                 arguments: vec![Node::new(InputValueDefinition {
@@ -196,7 +193,7 @@ pub fn patch_schema(
 
     query_root.make_mut().fields.insert(
         name!("_service"),
-        Component::new(FieldDefinition {
+        Node::new(FieldDefinition {
             description: None,
             name: name!("_service"),
             arguments: vec![],
@@ -234,7 +231,7 @@ fn is_federated_type(schema: &Schema, ty: &ExtendedType) -> bool {
                 .schema_definition
                 .query
                 .as_ref()
-                .is_none_or(|query| &query.name != ty.name())
+                .is_none_or(|query| query != ty.name())
     })
 }
 
@@ -242,7 +239,7 @@ fn is_federated_type(schema: &Schema, ty: &ExtendedType) -> bool {
 ///
 /// If we are loading a supergraph schema, types that are federated will use `@join__type`.
 /// If we are loading a subgraph schema, types that are federated will use [`@key`](key_definition).
-fn is_federated_directive(schema: &Schema, directive: &Component<Directive>) -> bool {
+fn is_federated_directive(schema: &Schema, directive: &Node<Directive>) -> bool {
     match directive.name.as_str() {
         "key" | "join__type" => {
             // federated unless explicitly marked resolvable: false

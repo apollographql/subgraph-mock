@@ -152,8 +152,33 @@ pub async fn send_request<T>(
 where
     T: Borrow<Option<String>>,
 {
-    send_request_with_headers(
+    send_request_with_variables_and_headers(
         operation_def,
+        JsonMap::new(),
+        schema_name,
+        state,
+        subgraph_name,
+        validate,
+        &[],
+    )
+    .await
+}
+
+/// Like [`send_request`], but with request variables.
+pub async fn send_request_with_variables<T>(
+    operation_def: String,
+    variables: JsonMap,
+    schema_name: Option<String>,
+    state: Arc<State>,
+    subgraph_name: T,
+    validate: bool,
+) -> anyhow::Result<ByteResponse>
+where
+    T: Borrow<Option<String>>,
+{
+    send_request_with_variables_and_headers(
+        operation_def,
+        variables,
         schema_name,
         state,
         subgraph_name,
@@ -176,6 +201,33 @@ pub async fn send_request_with_headers<T>(
 where
     T: Borrow<Option<String>>,
 {
+    send_request_with_variables_and_headers(
+        operation_def,
+        JsonMap::new(),
+        schema_name,
+        state,
+        subgraph_name,
+        validate,
+        headers,
+    )
+    .await
+}
+
+/// The shared implementation behind [`send_request`], [`send_request_with_variables`] and
+/// [`send_request_with_headers`].
+#[allow(clippy::too_many_arguments)]
+pub async fn send_request_with_variables_and_headers<T>(
+    operation_def: String,
+    variables: JsonMap,
+    schema_name: Option<String>,
+    state: Arc<State>,
+    subgraph_name: T,
+    validate: bool,
+    headers: &[(&str, &str)],
+) -> anyhow::Result<ByteResponse>
+where
+    T: Borrow<Option<String>>,
+{
     let uri = match subgraph_name.borrow() {
         Some(name) => format!("/{name}"),
         None => "/".to_owned(),
@@ -184,7 +236,7 @@ where
     let body = serde_json::to_vec(&GraphQLRequest {
         query: operation_def.clone(),
         operation_name: None,
-        variables: JsonMap::new(),
+        variables,
     })?;
 
     let mut builder = Request::builder().method("POST").uri(uri);
