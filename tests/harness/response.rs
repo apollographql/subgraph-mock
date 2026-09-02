@@ -204,7 +204,7 @@ fn validate_selection_set(
             for selection in &selection_set.selections {
                 match selection {
                     Selection::Field(field) => {
-                        let field_name = field.response_name();
+                        let field_name = field.response_key();
 
                         if !obj.contains_key(field_name.as_str())
                             && !errored_fields
@@ -312,7 +312,7 @@ fn validate_selection_set(
                 if let Selection::Field(field) = selection {
                     errors.push(ValidationError {
                         path: path.to_string(),
-                        field: field.response_name().to_string(),
+                        field: field.response_key().to_string(),
                         message: "Parent object is null".to_string(),
                     });
                 }
