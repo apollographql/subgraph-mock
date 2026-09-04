@@ -104,9 +104,8 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "apollo-compiler"
-version = "2.0.0-beta.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "031ad1ba5d073dc231b63bfac51cea2f180f4280c41b766f4d6db0f57474841f"
+version = "1.32.0"
+source = "git+https://github.com/apollographql/apollo-rs?branch=tninesling%2Fsmith-partial-data#c5b1b8349e8c45223ddb9aee2e3220d9d8f776f4"
 dependencies = [
  "ahash",
  "apollo-parser",
@@ -306,9 +305,8 @@ dependencies = [
 
 [[package]]
 name = "apollo-parser"
-version = "0.9.0-beta.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c72cf951e113a1a27378bdddb82ccf08bbe2f49436cf597eb851ae8cb012ea3"
+version = "0.8.6"
+source = "git+https://github.com/apollographql/apollo-rs?branch=tninesling%2Fsmith-partial-data#c5b1b8349e8c45223ddb9aee2e3220d9d8f776f4"
 dependencies = [
  "memchr",
  "rowan",
@@ -351,9 +349,8 @@ dependencies = [
 
 [[package]]
 name = "apollo-smith"
-version = "0.17.0-beta.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "431d7e72bc8589eccda45efffff858332e5cde5f19d104662f4cbdbaa1246532"
+version = "0.16.0"
+source = "git+https://github.com/apollographql/apollo-rs?branch=tninesling%2Fsmith-partial-data#c5b1b8349e8c45223ddb9aee2e3220d9d8f776f4"
 dependencies = [
  "apollo-compiler",
  "apollo-parser",
