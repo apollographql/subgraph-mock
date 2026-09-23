@@ -4,8 +4,8 @@ description: |
   the remote orchestrator: telemetry.otel/telemetry.http are turned on with the console exporter,
   and the scenario itself (a Script, not a Docker one) reads subgraph-mock's captured stdout
   directly via `docker logs` to verify it -- both the HTTP-layer spans/metrics and
-  subgraph-mock's own response-generation/cache metrics -- all in a single local `rtf run`. See
-  README.md.
+  subgraph-mock's own response-generation/cache/jemalloc metrics -- all in a single local
+  `rtf run`. See README.md.
 
 variables:
   subgraph_image: "local-subgraph-mock"
