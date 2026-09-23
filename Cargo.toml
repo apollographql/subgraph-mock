@@ -50,6 +50,14 @@ tower = "0.5"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }
 
+# glibc malloc (prod runtime is debian/trixie-slim, see Dockerfile) does not return freed pages
+# to the OS after allocation spikes, so RSS sticks at peak. jemalloc's background threads purge
+# dirty pages on a decay timer. Linux-only so local (macOS) dev builds keep the system allocator
+# and gain no C-build dependency.
+[target.'cfg(target_os = "linux")'.dependencies]
+tikv-jemallocator = { version = "0.7", features = ["background_threads"] }
+tikv-jemalloc-ctl = { version = "0.7", features = ["stats"] }
+
 # TODO: drop this patch once apollo-rs#1081 (ResponseBuilder::with_partial_data) is released
 [patch.crates-io]
 apollo-smith = { git = "https://github.com/apollographql/apollo-rs", branch = "tninesling/smith-partial-data" }

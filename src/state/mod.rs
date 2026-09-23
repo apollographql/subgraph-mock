@@ -17,6 +17,10 @@ use tracing::error;
 /// How often the `subgraph_mock.cache.size` gauge samples the internal caches' entry counts.
 const CACHE_SIZE_POLL_INTERVAL: Duration = Duration::from_secs(30);
 
+/// How often the `subgraph_mock.jemalloc.bytes` gauge samples jemalloc's own stats.
+#[cfg(target_os = "linux")]
+const JEMALLOC_POLL_INTERVAL: Duration = Duration::from_secs(30);
+
 mod config;
 mod health;
 mod rng;
@@ -43,6 +47,9 @@ pub struct State {
     /// Keeps the [GaugeExt::poll] background task that samples cache entry counts into
     /// `subgraph_mock.cache.size` alive for as long as this `State` is
     _cache_size_poll_guard: Option<PollGuard>,
+    /// Keeps the [GaugeExt::poll] background task that samples jemalloc stats into
+    /// `subgraph_mock.jemalloc.bytes` alive for as long as this `State`.
+    _jemalloc_poll_guard: Option<PollGuard>,
     /// Handle to the pollwatcher that updates the schema for this config, so that it only drops out of scope when this state does
     _schema_watcher: PollWatcher,
 }
@@ -105,6 +112,7 @@ impl State {
             response_generation_duration: response_generation_duration_histogram(),
             response_cache_lookups: response_cache_lookups_counter(),
             _cache_size_poll_guard: None,
+            _jemalloc_poll_guard: None,
             health_service,
             _schema_watcher: schema_watcher,
         })
@@ -147,6 +155,70 @@ impl State {
             }
         }));
 
+        self
+    }
+
+    /// (Re)starts the `subgraph_mock.jemalloc.bytes` poller against whichever meter provider is
+    /// currently installed.
+    #[cfg(target_os = "linux")]
+    pub fn with_jemalloc_metrics(mut self) -> Self {
+        use tikv_jemalloc_ctl::{epoch, stats};
+
+        // MIBs resolve the mallctl name to an integer path once, up front, instead of
+        // re-parsing the "stats.active" etc. string on every tick for the life of the process.
+        let epoch_mib = epoch::mib().expect("jemalloc epoch mib");
+        let active_mib = stats::active::mib().expect("jemalloc stats.active mib");
+        let allocated_mib = stats::allocated::mib().expect("jemalloc stats.allocated mib");
+        let resident_mib = stats::resident::mib().expect("jemalloc stats.resident mib");
+        let mapped_mib = stats::mapped::mib().expect("jemalloc stats.mapped mib");
+        let metadata_mib = stats::metadata::mib().expect("jemalloc stats.metadata mib");
+        let retained_mib = stats::retained::mib().expect("jemalloc stats.retained mib");
+
+        let gauge = meter()
+            .u64_gauge("subgraph_mock.jemalloc.bytes")
+            .with_description(
+                "jemalloc's own view of its memory use, tagged by `stat` (active, allocated, \
+                 resident, mapped, metadata, retained — jemalloc's stats.* names). Compare \
+                 against process RSS to see how much of it jemalloc is actually accounting for.",
+            )
+            .with_unit("By")
+            .build();
+
+        self._jemalloc_poll_guard = Some(gauge.poll(JEMALLOC_POLL_INTERVAL, move |observer| {
+            // jemalloc caches these counters; advancing the epoch refreshes all of them
+            // together, so every reading below reflects the same instant rather than six
+            // independent snapshots.
+            if let Err(err) = epoch_mib.advance() {
+                error!("failed to advance jemalloc epoch: {err}");
+                return;
+            }
+
+            // Each mallctl path is its own generated type (`ActiveMib`, `AllocatedMib`, ...),
+            // so the six reads can't share a loop over a homogeneous collection.
+            macro_rules! observe_stat {
+                ($mib:expr, $name:expr) => {
+                    match $mib.read() {
+                        Ok(bytes) => {
+                            observer.observe(bytes as u64, &[KeyValue::new("stat", $name)])
+                        }
+                        Err(err) => error!("failed to read jemalloc stats.{}: {err}", $name),
+                    }
+                };
+            }
+
+            observe_stat!(active_mib, "active");
+            observe_stat!(allocated_mib, "allocated");
+            observe_stat!(resident_mib, "resident");
+            observe_stat!(mapped_mib, "mapped");
+            observe_stat!(metadata_mib, "metadata");
+            observe_stat!(retained_mib, "retained");
+        }));
+
+        self
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub fn with_jemalloc_metrics(self) -> Self {
         self
     }
 }

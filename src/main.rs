@@ -11,6 +11,14 @@ use tracing_subscriber::{
     prelude::*,
 };
 
+// glibc malloc (prod runtime is debian/trixie-slim, see Dockerfile) does not return freed
+// memory to the OS after allocation spikes, so RSS sticks at peak. jemalloc's background
+// threads purge dirty pages back to the OS on a decay timer instead. Linux-only so local
+// (macOS) dev builds keep the system allocator and gain no C-build dependency.
+#[cfg(target_os = "linux")]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::registry()

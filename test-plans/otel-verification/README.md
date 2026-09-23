@@ -2,8 +2,13 @@
 
 Verifies subgraph-mock's OTel telemetry actually gets recorded correctly - propagation, span
 nesting, `subgraph.name` enrichment, the HTTP-layer body-size metrics, and subgraph-mock's own
-response-generation/cache metrics - without a live OTel Collector, and fully locally (will not run
-via the orchestrator).
+response-generation/cache/jemalloc metrics - without a live OTel Collector, and fully locally (will
+not run via the orchestrator).
+
+The jemalloc metrics specifically need this test plan rather than a unit test:
+`State::with_jemalloc_metrics` is Linux-only (see `main.rs`'s `#[global_allocator]`), so it only
+does anything real inside the actual container this test plan builds and runs - a unit test on a
+macOS dev machine would just exercise the no-op stub.
 
 subgraph-mock's `telemetry.otel` is configured with the `console` exporter, so telemetry data is
 written directly to the container's stdout instead of exported over the network. The scenario

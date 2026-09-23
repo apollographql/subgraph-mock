@@ -90,4 +90,15 @@ grep -q '"stringValue":"hit"' "$log_file" \
 grep -q 'subgraph_mock.cache.size' "$log_file" \
   || fail "no subgraph_mock.cache.size metric found"
 
+# Also a 30s background poll (see State::with_jemalloc_metrics), same immediate-first-tick
+# reasoning as cache.size above. Checking all six `stat` values, not just that the metric name
+# exists, is what actually proves each of the six jemalloc reads in that method landed correctly
+# rather than one being dropped or mistagged.
+grep -q 'subgraph_mock.jemalloc.bytes' "$log_file" \
+  || fail "no subgraph_mock.jemalloc.bytes metric found"
+for stat in active allocated resident mapped metadata retained; do
+  grep -q "\"stringValue\":\"$stat\"" "$log_file" \
+    || fail "no subgraph_mock.jemalloc.bytes data point found for stat=$stat"
+done
+
 echo "OK: subgraph-mock's captured log contains the expected spans and metrics"

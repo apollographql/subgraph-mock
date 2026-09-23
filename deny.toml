@@ -5,7 +5,12 @@
 all-features = true
 
 [advisories]
-ignore = []
+ignore = [
+    # tikv-jemalloc-ctl (jemalloc allocator metrics, see State::with_jemalloc_metrics) depends
+    # on the unmaintained `paste` crate for its stats-MIB codegen macros. No newer
+    # tikv-jemalloc-ctl release drops it, and there's no safe upgrade for `paste` itself.
+    "RUSTSEC-2024-0436",
+]
 
 [licenses]
 allow = [
