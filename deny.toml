@@ -35,3 +35,6 @@ wildcards = "deny"
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# TODO: drop this once apollo-rs#1081 (ResponseBuilder::with_partial_data) is released and
+# Cargo.toml's matching [patch.crates-io] git override goes away.
+allow-git = ["https://github.com/apollographql/apollo-rs"]
