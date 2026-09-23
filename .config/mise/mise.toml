@@ -1,5 +1,7 @@
 [tasks.fix-spelling]
 run = "typos --write-changes"
+# Mise uses this config file location as its CWD
+dir = "../../"
 
 [tasks.format-markdown]
 run = "dprint fmt"
@@ -22,6 +24,8 @@ run = "cargo pr-clippy"
 
 [tasks.pr-deny]
 run = "cargo deny check"
+# Mise uses this config file location as its CWD
+dir = "../../"
 
 [tasks.pr-rustdoc]
 run = "RUSTDOCFLAGS=\"-D warnings -D rustdoc::broken-intra-doc-links\" cargo doc --all-features --workspace --no-deps"
@@ -36,6 +40,8 @@ dir = "../../"
 
 [tasks.pr-spell-check]
 run = "typos"
+# Mise uses this config file location as its CWD
+dir = "../../"
 
 [tasks.pr-test]
 run = "cargo test"
