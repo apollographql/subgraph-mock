@@ -105,7 +105,8 @@ pub async fn mock_server_loop(
     let state = Arc::new(
         state
             .with_response_generation_duration()
-            .with_cache_metrics(),
+            .with_cache_metrics()
+            .with_jemalloc_metrics(),
     );
     let telemetry_stack = ServiceBuilder::new()
         .http_server_propagation()

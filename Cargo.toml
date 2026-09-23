@@ -56,6 +56,7 @@ tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }
 # and gain no C-build dependency.
 [target.'cfg(target_os = "linux")'.dependencies]
 tikv-jemallocator = { version = "0.7", features = ["background_threads"] }
+tikv-jemalloc-ctl = { version = "0.7", features = ["stats"] }
 
 # TODO: drop this patch once apollo-rs#1081 (ResponseBuilder::with_partial_data) is released
 [patch.crates-io]
