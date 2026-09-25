@@ -18,13 +18,13 @@ jobs:
       id-token: write
 
     steps:
-      - uses: apollographql/release-tooling/release-internal@90ea46d97dbe616eae7e2e77ce286537af1b3dac
+      - uses: apollographql/release-tooling/release-internal@0164abcc44f36be7659ce0be5bc984e4f44614d1
         name: "Release to internal repositories"
         with:
           commit_sha: ${{ inputs.commit_sha }}
           image_name: "subgraph-mock"
           version_number: ${{ inputs.version_number }}
-      - uses: apollographql/release-tooling/release-ghcr@90ea46d97dbe616eae7e2e77ce286537af1b3dac
+      - uses: apollographql/release-tooling/release-ghcr@0164abcc44f36be7659ce0be5bc984e4f44614d1
         name: "Release to GHCR"
         with:
           commit_sha: ${{ inputs.commit_sha }}
