@@ -6,6 +6,19 @@
         "*"
       ],
       "rangeStrategy": "replace"
+    },
+    {
+      // The Rust toolchain version is pinned in both .config/mise/mise.toml (CI and local dev)
+      // and the Dockerfile base image. Update them together so they cannot drift apart, since
+      // dependencies can require a newer rustc than the Dockerfile provides.
+      "matchPackageNames": [
+        "rust"
+      ],
+      "matchManagers": [
+        "mise",
+        "dockerfile"
+      ],
+      "groupName": "rust toolchain"
     }
   ]
 }
