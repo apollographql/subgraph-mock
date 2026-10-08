@@ -231,7 +231,7 @@ fn is_federated_type(schema: &Schema, ty: &ExtendedType) -> bool {
                 .schema_definition
                 .query
                 .as_ref()
-                .is_none_or(|query| **query != *ty.name())
+                .is_none_or(|query| query != ty.name())
     })
 }
 
