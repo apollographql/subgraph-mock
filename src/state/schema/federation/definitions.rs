@@ -179,7 +179,7 @@ pub fn link_definition() -> Definition {
             }),
         ],
         repeatable: true,
-        locations: [DirectiveLocation::Schema].into_iter().collect(),
+        locations: locations([DirectiveLocation::Schema]),
     }))
 }
 
@@ -204,9 +204,7 @@ pub fn key_definition() -> Definition {
             }),
         ],
         repeatable: true,
-        locations: [DirectiveLocation::Object, DirectiveLocation::Interface]
-            .into_iter()
-            .collect(),
+        locations: locations([DirectiveLocation::Object, DirectiveLocation::Interface]),
     }))
 }
 
@@ -222,7 +220,7 @@ pub fn requires_definition() -> Definition {
             directives: Default::default(),
         })],
         repeatable: false,
-        locations: [DirectiveLocation::FieldDefinition].into_iter().collect(),
+        locations: locations([DirectiveLocation::FieldDefinition]),
     }))
 }
 
@@ -238,7 +236,7 @@ pub fn provides_definition() -> Definition {
             directives: Default::default(),
         })],
         repeatable: false,
-        locations: [DirectiveLocation::FieldDefinition].into_iter().collect(),
+        locations: locations([DirectiveLocation::FieldDefinition]),
     }))
 }
 
@@ -248,12 +246,10 @@ pub fn external_definition() -> Definition {
         name: name!("external"),
         arguments: vec![],
         repeatable: false,
-        locations: [
+        locations: locations([
             DirectiveLocation::Object,
             DirectiveLocation::FieldDefinition,
-        ]
-        .into_iter()
-        .collect(),
+        ]),
     }))
 }
 
@@ -269,7 +265,7 @@ pub fn tag_definition() -> Definition {
             directives: Default::default(),
         })],
         repeatable: true,
-        locations: [
+        locations: locations([
             DirectiveLocation::FieldDefinition,
             DirectiveLocation::Object,
             DirectiveLocation::Interface,
@@ -280,9 +276,7 @@ pub fn tag_definition() -> Definition {
             DirectiveLocation::EnumValue,
             DirectiveLocation::InputObject,
             DirectiveLocation::InputFieldDefinition,
-        ]
-        .into_iter()
-        .collect(),
+        ]),
     }))
 }
 
@@ -292,12 +286,10 @@ pub fn shareable_definition() -> Definition {
         name: name!("shareable"),
         arguments: vec![],
         repeatable: false,
-        locations: [
+        locations: locations([
             DirectiveLocation::Object,
             DirectiveLocation::FieldDefinition,
-        ]
-        .into_iter()
-        .collect(),
+        ]),
     }))
 }
 
@@ -307,7 +299,7 @@ pub fn inaccessible_definition() -> Definition {
         name: name!("inaccessible"),
         arguments: vec![],
         repeatable: false,
-        locations: [
+        locations: locations([
             DirectiveLocation::FieldDefinition,
             DirectiveLocation::Object,
             DirectiveLocation::Interface,
@@ -318,9 +310,7 @@ pub fn inaccessible_definition() -> Definition {
             DirectiveLocation::EnumValue,
             DirectiveLocation::InputObject,
             DirectiveLocation::InputFieldDefinition,
-        ]
-        .into_iter()
-        .collect(),
+        ]),
     }))
 }
 
@@ -336,7 +326,7 @@ pub fn override_definition() -> Definition {
             directives: Default::default(),
         })],
         repeatable: false,
-        locations: [DirectiveLocation::FieldDefinition].into_iter().collect(),
+        locations: locations([DirectiveLocation::FieldDefinition]),
     }))
 }
 
@@ -352,7 +342,7 @@ pub fn compose_directive_definition() -> Definition {
             directives: Default::default(),
         })],
         repeatable: true,
-        locations: [DirectiveLocation::Schema].into_iter().collect(),
+        locations: locations([DirectiveLocation::Schema]),
     }))
 }
 
@@ -362,7 +352,7 @@ pub fn interface_object_definition() -> Definition {
         name: name!("interfaceObject"),
         arguments: vec![],
         repeatable: false,
-        locations: [DirectiveLocation::Object].into_iter().collect(),
+        locations: locations([DirectiveLocation::Object]),
     }))
 }
 
@@ -372,15 +362,13 @@ pub fn authenticated_definition() -> Definition {
         name: name!("authenticated"),
         arguments: vec![],
         repeatable: false,
-        locations: [
+        locations: locations([
             DirectiveLocation::FieldDefinition,
             DirectiveLocation::Object,
             DirectiveLocation::Interface,
             DirectiveLocation::Scalar,
             DirectiveLocation::Enum,
-        ]
-        .into_iter()
-        .collect(),
+        ]),
     }))
 }
 
@@ -398,15 +386,13 @@ pub fn requires_scopes_definition() -> Definition {
             directives: Default::default(),
         })],
         repeatable: false,
-        locations: [
+        locations: locations([
             DirectiveLocation::FieldDefinition,
             DirectiveLocation::Object,
             DirectiveLocation::Interface,
             DirectiveLocation::Scalar,
             DirectiveLocation::Enum,
-        ]
-        .into_iter()
-        .collect(),
+        ]),
     }))
 }
 
@@ -424,15 +410,13 @@ pub fn policy_definition() -> Definition {
             directives: Default::default(),
         })],
         repeatable: false,
-        locations: [
+        locations: locations([
             DirectiveLocation::FieldDefinition,
             DirectiveLocation::Object,
             DirectiveLocation::Interface,
             DirectiveLocation::Scalar,
             DirectiveLocation::Enum,
-        ]
-        .into_iter()
-        .collect(),
+        ]),
     }))
 }
 
@@ -448,13 +432,11 @@ pub fn context_definition() -> Definition {
             directives: Default::default(),
         })],
         repeatable: true,
-        locations: [
+        locations: locations([
             DirectiveLocation::Interface,
             DirectiveLocation::Object,
             DirectiveLocation::Union,
-        ]
-        .into_iter()
-        .collect(),
+        ]),
     }))
 }
 
@@ -470,9 +452,7 @@ pub fn from_context_definition() -> Definition {
             directives: Default::default(),
         })],
         repeatable: false,
-        locations: [DirectiveLocation::ArgumentDefinition]
-            .into_iter()
-            .collect(),
+        locations: locations([DirectiveLocation::ArgumentDefinition]),
     }))
 }
 
@@ -497,12 +477,10 @@ pub fn defer_definition() -> Node<DirectiveDefinition> {
             }),
         ],
         repeatable: false,
-        locations: [
+        locations: locations([
             DirectiveLocation::FragmentSpread,
             DirectiveLocation::InlineFragment,
-        ]
-        .into_iter()
-        .collect(),
+        ]),
     })
 }
 
@@ -534,6 +512,14 @@ pub fn stream_definition() -> Node<DirectiveDefinition> {
             }),
         ],
         repeatable: false,
-        locations: [DirectiveLocation::Field].into_iter().collect(),
+        locations: locations([DirectiveLocation::Field]),
     })
+}
+
+/// Builds a directive's location set from a fixed list, letting the target field decide the
+/// concrete collection type.
+fn locations<const N: usize, C: FromIterator<DirectiveLocation>>(
+    locations: [DirectiveLocation; N],
+) -> C {
+    locations.into_iter().collect()
 }

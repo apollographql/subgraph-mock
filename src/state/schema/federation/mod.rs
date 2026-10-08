@@ -239,7 +239,7 @@ fn is_federated_type(schema: &Schema, ty: &ExtendedType) -> bool {
 ///
 /// If we are loading a supergraph schema, types that are federated will use `@join__type`.
 /// If we are loading a subgraph schema, types that are federated will use [`@key`](key_definition).
-fn is_federated_directive(schema: &Schema, directive: &Node<Directive>) -> bool {
+fn is_federated_directive(schema: &Schema, directive: &Directive) -> bool {
     match directive.name.as_str() {
         "key" | "join__type" => {
             // federated unless explicitly marked resolvable: false
