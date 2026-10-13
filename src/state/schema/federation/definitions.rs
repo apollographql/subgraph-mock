@@ -4,8 +4,7 @@ use apollo_compiler::{
     ast::{Definition, EnumValueDefinition, FieldDefinition, InputValueDefinition, Type},
     name,
     schema::{
-        Component, DirectiveDefinition, DirectiveLocation, EnumType, ExtendedType, ObjectType,
-        ScalarType,
+        DirectiveDefinition, DirectiveLocation, EnumType, ExtendedType, ObjectType, ScalarType,
     },
     ty,
 };
@@ -46,7 +45,7 @@ pub fn insert_federation_types(schema: &mut Schema, federation_type: &Federation
             directives: Default::default(),
             fields: vec![(
                 name!("sdl"),
-                Component::new(FieldDefinition {
+                Node::new(FieldDefinition {
                     description: None,
                     name: name!("sdl"),
                     arguments: vec![],
@@ -82,7 +81,7 @@ pub fn insert_federation_types(schema: &mut Schema, federation_type: &Federation
                 values: vec![
                     (
                         name!("SECURITY"),
-                        Component::new(EnumValueDefinition {
+                        Node::new(EnumValueDefinition {
                             description: None,
                             value: name!("SECURITY"),
                             directives: Default::default(),
@@ -90,7 +89,7 @@ pub fn insert_federation_types(schema: &mut Schema, federation_type: &Federation
                     ),
                     (
                         name!("EXECUTION"),
-                        Component::new(EnumValueDefinition {
+                        Node::new(EnumValueDefinition {
                             description: None,
                             value: name!("EXECUTION"),
                             directives: Default::default(),
@@ -180,7 +179,7 @@ pub fn link_definition() -> Definition {
             }),
         ],
         repeatable: true,
-        locations: vec![DirectiveLocation::Schema],
+        locations: locations([DirectiveLocation::Schema]),
     }))
 }
 
@@ -205,7 +204,7 @@ pub fn key_definition() -> Definition {
             }),
         ],
         repeatable: true,
-        locations: vec![DirectiveLocation::Object, DirectiveLocation::Interface],
+        locations: locations([DirectiveLocation::Object, DirectiveLocation::Interface]),
     }))
 }
 
@@ -221,7 +220,7 @@ pub fn requires_definition() -> Definition {
             directives: Default::default(),
         })],
         repeatable: false,
-        locations: vec![DirectiveLocation::FieldDefinition],
+        locations: locations([DirectiveLocation::FieldDefinition]),
     }))
 }
 
@@ -237,7 +236,7 @@ pub fn provides_definition() -> Definition {
             directives: Default::default(),
         })],
         repeatable: false,
-        locations: vec![DirectiveLocation::FieldDefinition],
+        locations: locations([DirectiveLocation::FieldDefinition]),
     }))
 }
 
@@ -247,10 +246,10 @@ pub fn external_definition() -> Definition {
         name: name!("external"),
         arguments: vec![],
         repeatable: false,
-        locations: vec![
+        locations: locations([
             DirectiveLocation::Object,
             DirectiveLocation::FieldDefinition,
-        ],
+        ]),
     }))
 }
 
@@ -266,7 +265,7 @@ pub fn tag_definition() -> Definition {
             directives: Default::default(),
         })],
         repeatable: true,
-        locations: vec![
+        locations: locations([
             DirectiveLocation::FieldDefinition,
             DirectiveLocation::Object,
             DirectiveLocation::Interface,
@@ -277,7 +276,7 @@ pub fn tag_definition() -> Definition {
             DirectiveLocation::EnumValue,
             DirectiveLocation::InputObject,
             DirectiveLocation::InputFieldDefinition,
-        ],
+        ]),
     }))
 }
 
@@ -287,10 +286,10 @@ pub fn shareable_definition() -> Definition {
         name: name!("shareable"),
         arguments: vec![],
         repeatable: false,
-        locations: vec![
+        locations: locations([
             DirectiveLocation::Object,
             DirectiveLocation::FieldDefinition,
-        ],
+        ]),
     }))
 }
 
@@ -300,7 +299,7 @@ pub fn inaccessible_definition() -> Definition {
         name: name!("inaccessible"),
         arguments: vec![],
         repeatable: false,
-        locations: vec![
+        locations: locations([
             DirectiveLocation::FieldDefinition,
             DirectiveLocation::Object,
             DirectiveLocation::Interface,
@@ -311,7 +310,7 @@ pub fn inaccessible_definition() -> Definition {
             DirectiveLocation::EnumValue,
             DirectiveLocation::InputObject,
             DirectiveLocation::InputFieldDefinition,
-        ],
+        ]),
     }))
 }
 
@@ -327,7 +326,7 @@ pub fn override_definition() -> Definition {
             directives: Default::default(),
         })],
         repeatable: false,
-        locations: vec![DirectiveLocation::FieldDefinition],
+        locations: locations([DirectiveLocation::FieldDefinition]),
     }))
 }
 
@@ -343,7 +342,7 @@ pub fn compose_directive_definition() -> Definition {
             directives: Default::default(),
         })],
         repeatable: true,
-        locations: vec![DirectiveLocation::Schema],
+        locations: locations([DirectiveLocation::Schema]),
     }))
 }
 
@@ -353,7 +352,7 @@ pub fn interface_object_definition() -> Definition {
         name: name!("interfaceObject"),
         arguments: vec![],
         repeatable: false,
-        locations: vec![DirectiveLocation::Object],
+        locations: locations([DirectiveLocation::Object]),
     }))
 }
 
@@ -363,13 +362,13 @@ pub fn authenticated_definition() -> Definition {
         name: name!("authenticated"),
         arguments: vec![],
         repeatable: false,
-        locations: vec![
+        locations: locations([
             DirectiveLocation::FieldDefinition,
             DirectiveLocation::Object,
             DirectiveLocation::Interface,
             DirectiveLocation::Scalar,
             DirectiveLocation::Enum,
-        ],
+        ]),
     }))
 }
 
@@ -387,13 +386,13 @@ pub fn requires_scopes_definition() -> Definition {
             directives: Default::default(),
         })],
         repeatable: false,
-        locations: vec![
+        locations: locations([
             DirectiveLocation::FieldDefinition,
             DirectiveLocation::Object,
             DirectiveLocation::Interface,
             DirectiveLocation::Scalar,
             DirectiveLocation::Enum,
-        ],
+        ]),
     }))
 }
 
@@ -411,13 +410,13 @@ pub fn policy_definition() -> Definition {
             directives: Default::default(),
         })],
         repeatable: false,
-        locations: vec![
+        locations: locations([
             DirectiveLocation::FieldDefinition,
             DirectiveLocation::Object,
             DirectiveLocation::Interface,
             DirectiveLocation::Scalar,
             DirectiveLocation::Enum,
-        ],
+        ]),
     }))
 }
 
@@ -433,11 +432,11 @@ pub fn context_definition() -> Definition {
             directives: Default::default(),
         })],
         repeatable: true,
-        locations: vec![
+        locations: locations([
             DirectiveLocation::Interface,
             DirectiveLocation::Object,
             DirectiveLocation::Union,
-        ],
+        ]),
     }))
 }
 
@@ -453,7 +452,7 @@ pub fn from_context_definition() -> Definition {
             directives: Default::default(),
         })],
         repeatable: false,
-        locations: vec![DirectiveLocation::ArgumentDefinition],
+        locations: locations([DirectiveLocation::ArgumentDefinition]),
     }))
 }
 
@@ -478,10 +477,10 @@ pub fn defer_definition() -> Node<DirectiveDefinition> {
             }),
         ],
         repeatable: false,
-        locations: vec![
+        locations: locations([
             DirectiveLocation::FragmentSpread,
             DirectiveLocation::InlineFragment,
-        ],
+        ]),
     })
 }
 
@@ -513,6 +512,14 @@ pub fn stream_definition() -> Node<DirectiveDefinition> {
             }),
         ],
         repeatable: false,
-        locations: vec![DirectiveLocation::Field],
+        locations: locations([DirectiveLocation::Field]),
     })
+}
+
+/// Builds a directive's location set from a fixed list, letting the target field decide the
+/// concrete collection type.
+fn locations<const N: usize, C: FromIterator<DirectiveLocation>>(
+    locations: [DirectiveLocation; N],
+) -> C {
+    locations.into_iter().collect()
 }
