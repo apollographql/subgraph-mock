@@ -4,7 +4,9 @@ use crate::{
     latency::{LatencyConfig, LatencyGenerator},
     state::health::HealthConfig,
 };
-use apollo_configuration::{ParseYamlOptions, configuration, expansion::EnvVariables};
+use apollo_configuration::{
+    ConfigError, ConfigParser, Configuration, configuration, expansion::EnvVariables,
+};
 use apollo_http_server_telemetry::HttpServerTelemetryConfig;
 use apollo_opentelemetry::OpenTelemetryConfig;
 use hyper::{
@@ -15,6 +17,17 @@ use serde_json_bytes::serde_json;
 use serde_yaml::Value;
 use std::{collections::HashMap, fs, path::Path};
 use tracing::{info, warn};
+
+/// Parses `text` into `T`, expanding `${env.*}` variables.
+///
+/// A new [ConfigParser] is built per call, which recompiles the validation schema. That is fine
+/// for config loading, which only happens at startup and on file changes.
+pub(super) fn parse_config<T: Configuration>(text: &str) -> std::result::Result<T, ConfigError> {
+    ConfigParser::<T>::builder()
+        .add_variables(EnvVariables)
+        .build()?
+        .parse_yaml(text)
+}
 
 /// Allowed in the YAML, but not represented in the [BaseConfig] struct as we
 /// neither want nor need that data structure to be recursive.
@@ -105,18 +118,13 @@ impl TelemetrySection {
 }
 
 fn disabled_open_telemetry() -> OpenTelemetryConfig {
-    apollo_configuration::parse_yaml(
-        "disabled: true\n",
-        &ParseYamlOptions::default().variables(EnvVariables),
-    )
-    .expect("hand-written literal is valid YAML")
+    parse_config("disabled: true\n").expect("hand-written literal is valid YAML")
 }
 
 fn default_http_telemetry() -> HttpServerTelemetryConfig {
-    apollo_configuration::parse_yaml(
+    parse_config(
         "spans:\n  request_body_size: true\n  response_body_size: true\n\
          metrics:\n  request_body_size: true\n  response_body_size: true\n",
-        &ParseYamlOptions::default().variables(EnvVariables),
     )
     .expect("hand-written literal is valid YAML")
 }
@@ -210,10 +218,7 @@ impl Config {
 
                         merge_yaml(subgraph_override, &mut subgraph_config);
                         let subgraph_config_text = serde_yaml::to_string(&subgraph_config)?;
-                        let parsed_config: BaseConfig = apollo_configuration::parse_yaml(
-                            &subgraph_config_text,
-                            &ParseYamlOptions::default().variables(EnvVariables),
-                        )?;
+                        let parsed_config: BaseConfig = parse_config(&subgraph_config_text)?;
 
                         info!("generating customized config for {}", subgraph_name);
                         let (
@@ -239,10 +244,7 @@ impl Config {
         }
 
         let base_config_text = serde_yaml::to_string(&base)?;
-        let base_config: BaseConfig = apollo_configuration::parse_yaml(
-            &base_config_text,
-            &ParseYamlOptions::default().variables(EnvVariables),
-        )?;
+        let base_config: BaseConfig = parse_config(&base_config_text)?;
         let seed = base_config.seed;
         info!(seed = ?seed, "rng seed");
 

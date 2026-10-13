@@ -1,4 +1,5 @@
-use apollo_configuration::{ParseYamlOptions, configuration, expansion::EnvVariables};
+use super::config::parse_config;
+use apollo_configuration::configuration;
 use apollo_healthcheck::{HealthEndpoints, HealthService, config::HealthEndpointsConfig};
 use http_body_util::Full;
 use hyper::{Request, Response, StatusCode, body::Bytes, header};
@@ -31,11 +32,8 @@ impl HealthConfig {
     /// subgraph-mock actually exposes; `paths` is left at the crate's own defaults, since
     /// [SingleHealthEndpoint] never exposes those individual paths externally.
     pub(super) fn to_health_endpoints_config(&self) -> HealthEndpointsConfig {
-        apollo_configuration::parse_yaml(
-            &format!("recovery_ttl: {}\n", self.recovery_ttl),
-            &ParseYamlOptions::default().variables(EnvVariables),
-        )
-        .expect("a Duration re-serialized via Display always parses back as one")
+        parse_config(&format!("recovery_ttl: {}\n", self.recovery_ttl))
+            .expect("a Duration re-serialized via Display always parses back as one")
     }
 }
 
