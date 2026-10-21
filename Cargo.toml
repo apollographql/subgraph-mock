@@ -26,7 +26,7 @@ apollo-http-server-telemetry = "0.4.2"
 apollo-opentelemetry = { version = "0.12.0", default-features = false, features = ["otlp", "tower"] }
 apollo-smith = "0.17.0-beta.1"
 base64 = "0.22"
-cached = { version = "0.59.0", features = ["async", "async_tokio_rt_multi_thread"] }
+cached = { version = "4.0.0", features = ["async", "async_tokio_rt_multi_thread"] }
 clap = { version = "4.5.47", features = ["derive"] }
 http = "1.5.0"
 http-body-util = "0.1.3"
