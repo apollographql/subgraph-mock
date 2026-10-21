@@ -3003,7 +3003,7 @@ dependencies = [
  "apollo-parser",
  "apollo-smith",
  "arbitrary",
- "base64 0.22.1",
+ "base64 0.23.1",
  "cached",
  "clap",
  "futures",
