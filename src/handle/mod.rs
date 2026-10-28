@@ -1,5 +1,8 @@
-use crate::state::State;
-use http_body_util::{BodyExt, Full, combinators::BoxBody};
+use crate::{
+    failure_schedule::Failure,
+    state::{Config, State},
+};
+use http_body_util::{BodyExt, Empty, Full, combinators::BoxBody};
 use hyper::{
     Method, Request, Response, StatusCode,
     body::{Body, Bytes},
@@ -65,10 +68,11 @@ where
             let should_emit_ftv1 = rgen_cfg.ftv1.unwrap_or(include_ftv1);
 
             (
-                graphql::handle(
+                handle_graphql(
                     body_bytes,
                     Some(subgraph_name),
-                    state.clone(),
+                    &state,
+                    &config,
                     should_emit_ftv1,
                 )
                 .await,
@@ -82,7 +86,7 @@ where
             let should_emit_ftv1 = config.response_generation.ftv1.unwrap_or(include_ftv1);
 
             (
-                graphql::handle(body_bytes, None, state.clone(), should_emit_ftv1).await,
+                handle_graphql(body_bytes, None, &state, &config, should_emit_ftv1).await,
                 None,
             )
         }
@@ -108,4 +112,36 @@ where
     sleep(latency).await;
 
     Ok(res)
+}
+
+/// Applies the failure schedule covering `subgraph_name`, then hands the request to
+/// [graphql::handle] unless the schedule fails it outright.
+///
+/// An `http_status` failure returns before the body is parsed, the RNG is drawn or the response
+/// cache is consulted, so a cached response can't slip through a failure window.
+async fn handle_graphql(
+    body_bytes: Vec<u8>,
+    subgraph_name: Option<&str>,
+    state: &Arc<State>,
+    config: &Config,
+    should_emit_ftv1: bool,
+) -> ByteResponse {
+    // Every GraphQL request reads the clock, even for an unscheduled subgraph, because the first
+    // one starts it for all schedules.
+    let elapsed = state.failure_schedule_clock.elapsed();
+    match config
+        .failure_schedule_for(subgraph_name)
+        .and_then(|schedule| schedule.failure_at(elapsed))
+    {
+        Some(Failure::HttpStatus(status)) => {
+            let mut resp = Response::new(Empty::new().map_err(|never| match never {}).boxed());
+            *resp.status_mut() = StatusCode::from_u16(status)
+                .expect("config validation limits http_status to 400..=599");
+            return resp;
+        }
+        Some(Failure::Delay(delay)) => sleep(*delay).await,
+        None => {}
+    }
+
+    graphql::handle(body_bytes, subgraph_name, state.clone(), should_emit_ftv1).await
 }

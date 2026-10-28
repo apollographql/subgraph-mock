@@ -21,6 +21,7 @@ use tracing::{error, info, warn};
 const SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_secs(10);
 
 pub mod error;
+pub mod failure_schedule;
 pub mod ftv1;
 pub mod handle;
 pub mod latency;
@@ -106,6 +107,7 @@ pub async fn mock_server_loop(
         state
             .with_response_generation_duration()
             .with_cache_metrics()
+            .with_failure_schedule_metrics()
             .with_jemalloc_metrics(),
     );
     let telemetry_stack = ServiceBuilder::new()
