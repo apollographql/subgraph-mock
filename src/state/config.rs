@@ -1,5 +1,6 @@
 use crate::{
     error::{Error, Result},
+    failure_schedule::{FailureScheduleConfig, NamedSchedule},
     handle::graphql::ResponseGenerationConfig,
     latency::{LatencyConfig, LatencyGenerator},
     state::health::HealthConfig,
@@ -41,6 +42,7 @@ type BaseConfigParts = (
     ResponseGenerationConfig,
     HealthConfig,
     TelemetryConfig,
+    Option<FailureScheduleConfig>,
 );
 
 #[configuration]
@@ -54,6 +56,7 @@ struct BaseConfig {
     pub headers: HashMap<String, String>,
     #[config(default = LatencyConfig::default_with_sine())]
     pub latency: LatencyConfig,
+    pub failure_schedule: Option<FailureScheduleConfig>,
     pub response_generation: ResponseGenerationConfig,
     #[config(default = default_cache_responses())]
     pub cache_responses: bool,
@@ -78,6 +81,10 @@ impl BaseConfig {
         info!(config=%serde_json::to_string(&self.latency).unwrap(), "latency generation");
         let latency_generator = LatencyGenerator::new(self.latency);
 
+        if let Some(failure_schedule) = &self.failure_schedule {
+            info!(config=%serde_json::to_string(failure_schedule).unwrap(), "failure schedule");
+        }
+
         info!(headers=%serde_json::to_string(&self.headers).unwrap(), "additional headers");
         let additional_headers: Result<HeaderMap<HeaderValue>> = self
             .headers
@@ -98,6 +105,7 @@ impl BaseConfig {
             response_generation,
             self.health,
             self.telemetry.resolve(),
+            self.failure_schedule,
         ))
     }
 }
@@ -139,6 +147,7 @@ pub struct TelemetryConfig {
 pub struct Config {
     pub headers: HeaderMap<HeaderValue>,
     pub latency_generator: LatencyGenerator,
+    pub failure_schedule: Option<FailureScheduleConfig>,
     pub response_generation: ResponseGenerationConfig,
     pub cache_responses: bool,
     pub subgraph_overrides: SubgraphOverrides,
@@ -151,6 +160,8 @@ pub struct Config {
 pub struct SubgraphOverrides {
     pub headers: HashMap<String, HeaderMap<HeaderValue>>,
     pub latency_generator: HashMap<String, LatencyGenerator>,
+    /// `None` entries matter: they switch off an inherited top-level schedule.
+    pub failure_schedule: HashMap<String, Option<FailureScheduleConfig>>,
     pub response_generation: HashMap<String, ResponseGenerationConfig>,
     pub cache_responses: HashMap<String, bool>,
 }
@@ -160,6 +171,7 @@ impl Default for Config {
         Self {
             headers: Default::default(),
             latency_generator: LatencyGenerator::new(LatencyConfig::default_with_sine()),
+            failure_schedule: None,
             response_generation: Default::default(),
             cache_responses: default_cache_responses(),
             subgraph_overrides: Default::default(),
@@ -185,6 +197,7 @@ impl Config {
         let mut subgraph_cache_responses = HashMap::new();
         let mut subgraph_headers = HashMap::new();
         let mut subgraph_latency_generators = HashMap::new();
+        let mut subgraph_failure_schedules = HashMap::new();
         let mut subgraph_response_generation_configs = HashMap::new();
 
         if let Some(overrides) = mapping.remove(SUBGRAPH_OVERRIDES_KEY) {
@@ -216,6 +229,12 @@ impl Config {
                             warn!("health overrides for subgraphs will be ignored")
                         }
 
+                        // The merged config always carries the top-level schedule, so only an
+                        // override that names the key gets its own schedule (and its own gauge
+                        // series and window logs).
+                        let overrides_failure_schedule =
+                            override_mapping.contains_key("failure_schedule");
+
                         merge_yaml(subgraph_override, &mut subgraph_config);
                         let subgraph_config_text = serde_yaml::to_string(&subgraph_config)?;
                         let parsed_config: BaseConfig = parse_config(&subgraph_config_text)?;
@@ -229,11 +248,16 @@ impl Config {
                             response_generation,
                             _health,
                             _telemetry_config,
+                            failure_schedule,
                         ) = parsed_config.into_parts()?;
 
                         subgraph_cache_responses.insert(subgraph_name.clone(), cache_responses);
                         subgraph_latency_generators
                             .insert(subgraph_name.clone(), latency_generator);
+                        if overrides_failure_schedule {
+                            subgraph_failure_schedules
+                                .insert(subgraph_name.clone(), failure_schedule);
+                        }
                         subgraph_headers.insert(subgraph_name.clone(), headers);
                         subgraph_response_generation_configs
                             .insert(subgraph_name, response_generation);
@@ -256,6 +280,7 @@ impl Config {
             response_generation,
             health,
             telemetry_config,
+            failure_schedule,
         ) = base_config.into_parts()?;
 
         Ok((
@@ -264,11 +289,13 @@ impl Config {
             Config {
                 headers,
                 latency_generator: latency,
+                failure_schedule,
                 response_generation,
                 cache_responses,
                 subgraph_overrides: SubgraphOverrides {
                     headers: subgraph_headers,
                     latency_generator: subgraph_latency_generators,
+                    failure_schedule: subgraph_failure_schedules,
                     response_generation: subgraph_response_generation_configs,
                     cache_responses: subgraph_cache_responses,
                 },
@@ -276,6 +303,32 @@ impl Config {
             },
             telemetry_config,
         ))
+    }
+
+    /// The failure schedule covering requests to `subgraph_name`: its override if it has one,
+    /// otherwise the top-level schedule.
+    pub fn failure_schedule_for(
+        &self,
+        subgraph_name: Option<&str>,
+    ) -> Option<&FailureScheduleConfig> {
+        subgraph_name
+            .and_then(|name| self.subgraph_overrides.failure_schedule.get(name))
+            .unwrap_or(&self.failure_schedule)
+            .as_ref()
+    }
+
+    /// Every configured schedule, with the subgraph it overrides (`None` for the top-level one).
+    pub fn failure_schedules(&self) -> Vec<NamedSchedule> {
+        let overrides = self
+            .subgraph_overrides
+            .failure_schedule
+            .iter()
+            .filter_map(|(name, schedule)| Some((Some(name.clone()), (*schedule)?)));
+        self.failure_schedule
+            .map(|schedule| (None, schedule))
+            .into_iter()
+            .chain(overrides)
+            .collect()
     }
 }
 

@@ -1,0 +1,9 @@
+latency:
+  base: 5ms
+
+failure_schedule:
+  duration: 30s
+
+subgraph_overrides:
+  healthy_subgraph:
+    failure_schedule: null
