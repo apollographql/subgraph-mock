@@ -127,12 +127,12 @@ pub async fn handle(
 
         let mut attrs = vec![KeyValue::new(
             "cache.result",
-            if result.was_cached { "hit" } else { "miss" },
+            if result.was_cached() { "hit" } else { "miss" },
         )];
         push_subgraph_attr(&mut attrs, subgraph_name);
         state.response_cache_lookups.add(1, &attrs);
 
-        result.value
+        result.into_inner()
     } else {
         generate_body(
             rgen_cfg,
@@ -407,7 +407,6 @@ fn primary_operation(doc: &ExecutableDocument) -> Option<&Node<Operation>> {
 
 #[cached(
     name = "PARSE_AND_VALIDATE_CACHE",
-    result = true,
     key = "u64",
     convert = "{_cache_hash}"
 )]
@@ -415,10 +414,10 @@ fn parse_and_validate(
     req: &GraphQLRequest,
     schema: &FederatedSchema,
     _cache_hash: u64,
-) -> Result<Valid<ExecutableDocument>, WithErrors<ExecutableDocument>> {
+) -> Result<Valid<ExecutableDocument>, Box<WithErrors<ExecutableDocument>>> {
     let op_name = req.operation_name.as_deref().unwrap_or("unknown");
 
-    ExecutableDocument::parse_and_validate(schema, &req.query, op_name)
+    ExecutableDocument::parse_and_validate(schema, &req.query, op_name).map_err(Box::new)
 }
 
 /// Builds (or reuses) the FTV1 node tree for an operation, keyed on the same `cache_hash` as the
@@ -550,11 +549,11 @@ pub(crate) fn cache_sizes() -> Vec<(&'static str, i64)> {
     let mut sizes = vec![
         (
             "parse_and_validate",
-            PARSE_AND_VALIDATE_CACHE.lock().cache_size() as i64,
+            PARSE_AND_VALIDATE_CACHE.read().cache_size() as i64,
         ),
         (
             "cached_trace_shape",
-            CACHED_TRACE_SHAPE_CACHE.lock().cache_size() as i64,
+            CACHED_TRACE_SHAPE_CACHE.read().cache_size() as i64,
         ),
     ];
 
@@ -562,7 +561,7 @@ pub(crate) fn cache_sizes() -> Vec<(&'static str, i64)> {
     // than the sync one the two caches above get — no blocking `.lock()` available here. Losing
     // the race just omits this cache from this tick's sample; the next tick tries again, and the
     // lock is only ever held for the moment of an actual cache read/write.
-    if let Ok(cache) = RESPONSE_BYTES_CACHE.try_lock() {
+    if let Some(cache) = RESPONSE_BYTES_CACHE.try_read() {
         sizes.push((
             "into_response_bytes_and_status_code",
             cache.cache_size() as i64,
