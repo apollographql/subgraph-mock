@@ -1,14 +1,14 @@
-use serde_yaml::Value;
 use subgraph_mock::state::Config;
+use yaml_serde::Value;
 
 fn parse_otel(yaml: &str) -> String {
-    let value: Value = serde_yaml::from_str(yaml).expect("test fixture should be valid YAML");
+    let value: Value = yaml_serde::from_str(yaml).expect("test fixture should be valid YAML");
     let (_, _, _, telemetry_config) = Config::parse_yaml(value).expect("expected config to parse");
     format!("{:?}", telemetry_config.otel)
 }
 
 fn parse_http(yaml: &str) -> String {
-    let value: Value = serde_yaml::from_str(yaml).expect("test fixture should be valid YAML");
+    let value: Value = yaml_serde::from_str(yaml).expect("test fixture should be valid YAML");
     let (_, _, _, telemetry_config) = Config::parse_yaml(value).expect("expected config to parse");
     format!("{:?}", telemetry_config.http)
 }
@@ -106,7 +106,7 @@ fn explicit_body_size_choice_is_respected() {
 
 #[test]
 fn otel_and_http_resolve_independently_under_one_telemetry_key() {
-    let value: Value = serde_yaml::from_str(
+    let value: Value = yaml_serde::from_str(
         "telemetry:\n  otel:\n    disabled: false\n  http:\n    spans:\n      request_body_size: false\n",
     )
     .unwrap();

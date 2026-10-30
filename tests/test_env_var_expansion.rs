@@ -1,8 +1,8 @@
-use serde_yaml::Value;
 use subgraph_mock::state::Config;
+use yaml_serde::Value;
 
 fn parse_otel(yaml: &str) -> String {
-    let value: Value = serde_yaml::from_str(yaml).expect("test fixture should be valid YAML");
+    let value: Value = yaml_serde::from_str(yaml).expect("test fixture should be valid YAML");
     let (_, _, _, telemetry_config) = Config::parse_yaml(value).expect("expected config to parse");
     format!("{:?}", telemetry_config.otel)
 }
@@ -51,7 +51,7 @@ fn env_var_expansion_applies_to_a_non_telemetry_field() {
     let var = "SUBGRAPH_MOCK_TEST_ENV_EXPANSION_HEADER_PROBE";
     unsafe { std::env::set_var(var, "probe-value") };
 
-    let value: Value = serde_yaml::from_str(
+    let value: Value = yaml_serde::from_str(
         "headers:\n  X-Probe: \"${env.SUBGRAPH_MOCK_TEST_ENV_EXPANSION_HEADER_PROBE}\"\n",
     )
     .expect("test fixture should be valid YAML");

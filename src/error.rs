@@ -14,7 +14,7 @@ pub enum Error {
     #[diagnostic(code(config::yaml))]
     Yaml {
         #[from]
-        source: serde_yaml::Error,
+        source: yaml_serde::Error,
     },
 
     #[error("config file must be a mapping")]

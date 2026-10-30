@@ -7,7 +7,6 @@ use hyper_util::{
     server::{conn::auto::Builder, graceful::GracefulShutdown},
     service::TowerToHyperService,
 };
-use serde_yaml::{Mapping, Value};
 use state::{Config, RngSource, State, TelemetryConfig};
 #[cfg(not(unix))]
 use std::future;
@@ -15,6 +14,7 @@ use std::{future::Future, net::SocketAddr, path::PathBuf, sync::Arc, time::Durat
 use tokio::{net::TcpListener, signal};
 use tower::{ServiceBuilder, service_fn};
 use tracing::{error, info, warn};
+use yaml_serde::{Mapping, Value};
 
 /// How long [mock_server_loop] waits for in-flight connections to finish after a shutdown
 /// signal before giving up and letting them be dropped mid-request.

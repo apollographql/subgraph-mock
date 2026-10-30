@@ -1,9 +1,9 @@
-use serde_yaml::Value;
 use std::path::Path;
 use subgraph_mock::{error::Error, state::Config};
+use yaml_serde::Value;
 
 fn parse_err(yaml: &str) -> Error {
-    let value: Value = serde_yaml::from_str(yaml).expect("test fixture should be valid YAML");
+    let value: Value = yaml_serde::from_str(yaml).expect("test fixture should be valid YAML");
     Config::parse_yaml(value).expect_err("expected a config error")
 }
 

@@ -44,11 +44,11 @@ rand = "0.10.3"
 schemars = "1.2.3"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json_bytes = "0.2.6"
-serde_yaml = "0.9.34"
 tokio = { workspace = true }
 tower = "0.5"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
+yaml_serde = "0.10.7"
 
 # glibc malloc (prod runtime is debian/trixie-slim, see Dockerfile) does not return freed pages
 # to the OS after allocation spikes, so RSS sticks at peak. jemalloc's background threads purge

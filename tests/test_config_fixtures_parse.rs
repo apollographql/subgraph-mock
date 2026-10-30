@@ -28,7 +28,7 @@ fn all_config_fixtures_parse() -> Result<()> {
 
 fn parse(path: &Path) -> Result<()> {
     let contents = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-    let value: serde_yaml::Value = serde_yaml::from_slice(&contents)?;
+    let value: yaml_serde::Value = yaml_serde::from_slice(&contents)?;
     Config::parse_yaml(value).with_context(|| format!("parsing {}", path.display()))?;
     Ok(())
 }
