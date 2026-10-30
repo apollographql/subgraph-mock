@@ -10,6 +10,9 @@ ignore = [
     # on the unmaintained `paste` crate for its stats-MIB codegen macros. No newer
     # tikv-jemalloc-ctl release drops it, and there's no safe upgrade for `paste` itself.
     "RUSTSEC-2024-0436",
+    # apollo-configuration still depends on serde_yaml even though we have removed our direct
+    # dependency on it here. Once that is updated we can remove this ignore.
+    "RUSTSEC-2024-0449"
 ]
 
 [licenses]
@@ -40,6 +43,3 @@ wildcards = "deny"
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-# TODO: drop this once apollo-rs#1081 (ResponseBuilder::with_partial_data) is released and
-# Cargo.toml's matching [patch.crates-io] git override goes away.
-allow-git = ["https://github.com/apollographql/apollo-rs"]
