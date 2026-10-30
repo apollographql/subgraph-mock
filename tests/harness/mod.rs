@@ -74,7 +74,7 @@ pub fn initialize(
 }
 
 /// Cached supergraph document that is used as the basis for generating requests
-#[cached(result = true)]
+#[cached]
 fn generate_test_doc() -> anyhow::Result<Document> {
     let supergraph = include_str!("../data/schema.graphql");
     let parser = Parser::new(supergraph);
@@ -89,7 +89,7 @@ fn generate_test_doc() -> anyhow::Result<Document> {
 }
 
 /// Cached supergraph schema for response validation
-#[cached(result = true)]
+#[cached]
 fn generate_schema(schema_file_name: Option<String>) -> anyhow::Result<Valid<Schema>> {
     let path = schema_pathbuf(schema_file_name.as_ref());
     let supergraph = std::fs::read_to_string(path).map_err(|err| anyhow!(err))?;

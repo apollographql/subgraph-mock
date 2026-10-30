@@ -14,9 +14,9 @@ use hyper::{
     header::{HeaderName, HeaderValue},
 };
 use serde_json_bytes::serde_json;
-use serde_yaml::Value;
 use std::{collections::HashMap, fs, path::Path};
 use tracing::{info, warn};
+use yaml_serde::Value;
 
 /// Parses `text` into `T`, expanding `${env.*}` variables.
 ///
@@ -173,7 +173,7 @@ impl Config {
     /// [TelemetryConfig]
     pub fn from_file(path: &Path) -> Result<(u16, Option<u64>, Config, TelemetryConfig)> {
         let bytes = fs::read(path)?;
-        let value = serde_yaml::from_slice(&bytes)?;
+        let value = yaml_serde::from_slice(&bytes)?;
 
         Self::parse_yaml(value)
     }
@@ -192,7 +192,7 @@ impl Config {
                 Value::Mapping(mapping) => {
                     for (subgraph_name, subgraph_override) in mapping {
                         let mut subgraph_config = base.clone();
-                        let subgraph_name: String = serde_yaml::from_value(subgraph_name)?;
+                        let subgraph_name: String = yaml_serde::from_value(subgraph_name)?;
 
                         let override_mapping = subgraph_override.as_mapping().ok_or_else(|| {
                             Error::OverrideNotAMapping {
@@ -217,7 +217,7 @@ impl Config {
                         }
 
                         merge_yaml(subgraph_override, &mut subgraph_config);
-                        let subgraph_config_text = serde_yaml::to_string(&subgraph_config)?;
+                        let subgraph_config_text = yaml_serde::to_string(&subgraph_config)?;
                         let parsed_config: BaseConfig = parse_config(&subgraph_config_text)?;
 
                         info!("generating customized config for {}", subgraph_name);
@@ -243,7 +243,7 @@ impl Config {
             }
         }
 
-        let base_config_text = serde_yaml::to_string(&base)?;
+        let base_config_text = yaml_serde::to_string(&base)?;
         let base_config: BaseConfig = parse_config(&base_config_text)?;
         let seed = base_config.seed;
         info!(seed = ?seed, "rng seed");
@@ -283,9 +283,7 @@ impl Config {
 /// It does *not* combine arrays, since arrays are effectively scalar values that should be replaced, not merged,
 /// in the context of the subgraph config. We may also want to revisit the mapping merge logic if it ends up being
 /// unintuitive in the context of configuration such as the latency waveforms.
-fn merge_yaml(overrides: serde_yaml::Value, base: &mut serde_yaml::Value) {
-    use serde_yaml::Value;
-
+fn merge_yaml(overrides: Value, base: &mut Value) {
     match (overrides, base) {
         // If both values are mappings we add all keys from src into dst.
         (Value::Mapping(override_map), Value::Mapping(base_map)) => {
