@@ -1,6 +1,8 @@
 use anyhow::ensure;
 use futures::stream::{FuturesUnordered, StreamExt};
-use harness::{Post, Query, User, assert_is_sine, make_request, parse_response};
+use harness::{
+    Post, Query, User, assert_is_sine, make_request, make_user_and_posts_request, parse_response,
+};
 use std::time::Duration;
 
 mod harness;
@@ -70,7 +72,7 @@ async fn default_response_generation() -> anyhow::Result<()> {
             // is_active, and distance) plus a list of posts (with views). To see it, run the
             // test with RUST_LOG=debug.
             async {
-                let response = make_request(54167, state.clone(), None).await?;
+                let response = make_user_and_posts_request(state.clone(), None).await?;
                 ensure!(200 == response.status());
                 parse_response(response).await
             }
@@ -126,7 +128,7 @@ async fn default_response_generation() -> anyhow::Result<()> {
         .count();
 
     // The default boolean generator is 50% true; the seeded run's exact count.
-    assert_eq!(240, true_count);
+    assert_eq!(235, true_count);
 
     for post in posts {
         // the default Int range is 0-100

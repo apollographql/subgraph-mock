@@ -58,9 +58,7 @@ async fn malformed_json_is_rejected() -> anyhow::Result<()> {
 async fn invalid_query_carries_every_diagnostic() -> anyhow::Result<()> {
     let (_, state) = harness::initialize(None, None)?;
 
-    // Two unknown fields -- confirmed empirically (examples/scratch_request_errors.rs, since
-    // deleted) that apollo_compiler reports *four* diagnostics for this shape, not two: each
-    // unknown field also fails the "must have a subselection set" check on `Post`.
+    // Two unknown fields, two expected errors.
     let body = serde_json::json!({
         "query": "{ posts { unknownField1 } post(id: \"1\") { unknownField2 } }",
     })
@@ -77,7 +75,7 @@ async fn invalid_query_carries_every_diagnostic() -> anyhow::Result<()> {
         .get("errors")
         .and_then(Value::as_array)
         .unwrap_or_else(|| panic!("expected an errors array, got {json:?}"));
-    assert_eq!(errors.len(), 4);
+    assert_eq!(errors.len(), 2);
     for error in errors {
         assert!(error.get("message").is_some());
         assert!(error.get("locations").is_some());

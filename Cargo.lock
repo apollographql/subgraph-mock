@@ -104,9 +104,9 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "apollo-compiler"
-version = "2.0.0-beta.1"
+version = "2.0.0-beta.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "031ad1ba5d073dc231b63bfac51cea2f180f4280c41b766f4d6db0f57474841f"
+checksum = "29c770fa043a08a4db8b676929e6715c618d1d35bcba7caf36cee2274526cc08"
 dependencies = [
  "ahash",
  "apollo-parser",
@@ -306,9 +306,9 @@ dependencies = [
 
 [[package]]
 name = "apollo-parser"
-version = "0.9.0-beta.0"
+version = "0.9.0-beta.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c72cf951e113a1a27378bdddb82ccf08bbe2f49436cf597eb851ae8cb012ea3"
+checksum = "f7dc28af62cc545b679f3e02c44edd48d4f256053f7df66e5c69c172daab2d88"
 dependencies = [
  "memchr",
  "rowan",
@@ -329,14 +329,15 @@ dependencies = [
 
 [[package]]
 name = "apollo-smith"
-version = "0.17.0-beta.1"
+version = "0.17.0-beta.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "431d7e72bc8589eccda45efffff858332e5cde5f19d104662f4cbdbaa1246532"
+checksum = "67d7828bfd9abe046016484d7f0c99a203b683774ddb35d49d096aff3b352601"
 dependencies = [
  "apollo-compiler",
  "apollo-parser",
  "arbitrary",
  "indexmap",
+ "itertools 0.13.0",
  "once_cell",
  "petgraph",
  "rand 0.10.3",
@@ -1622,6 +1623,15 @@ checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
 
 [[package]]
 name = "itertools"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
+dependencies = [
+ "either",
+]
+
+[[package]]
+name = "itertools"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
@@ -2451,7 +2461,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b570b25f7617e43d59005d0990ccb79e950a423952cea19671b7a876da390adf"
 dependencies = [
  "anyhow",
- "itertools",
+ "itertools 0.14.0",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -3109,7 +3119,7 @@ dependencies = [
 
 [[package]]
 name = "subgraph-mock"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "apollo-compiler",
