@@ -123,9 +123,9 @@ dependencies = [
 
 [[package]]
 name = "apollo-configuration"
-version = "0.10.0"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1dcbf8f01b72646bfb64ccaaf089157e2e794d2902b5ba6511a0f0f5602135a4"
+checksum = "269d9bc63d11caaa095c43165b221f92d88b5157ee2c14efd6682cc4ad6b99ef"
 dependencies = [
  "apollo-configuration-macros",
  "apollo-errors",
@@ -143,10 +143,10 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_path_to_error",
- "serde_yaml",
  "shellexpand",
  "tonic",
  "url",
+ "yaml_serde",
 ]
 
 [[package]]
@@ -190,9 +190,9 @@ dependencies = [
 
 [[package]]
 name = "apollo-healthcheck"
-version = "0.5.6"
+version = "0.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3aacbf4b9cfef17f6e5a7d81d817c349a39adfd753fe68300672b7573ab3dd07"
+checksum = "1efb2592621b0b5d00344b77eb3b2e4a3d4f5f2f0f7d0ddd82421c8892b08d7c"
 dependencies = [
  "apollo-configuration",
  "apollo-opentelemetry",
@@ -212,9 +212,9 @@ dependencies = [
 
 [[package]]
 name = "apollo-http-server-telemetry"
-version = "0.4.6"
+version = "0.4.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2cd56fa7edfde6dc2036496b009d043b283b88e292782429b72d6c0851c3b0e3"
+checksum = "005105d8a417803cfb8dfd0b4eeea6b72cdc90522c2228442d9c8d31eb111b21"
 dependencies = [
  "apollo-configuration",
  "apollo-http-shared",
@@ -246,9 +246,9 @@ dependencies = [
 
 [[package]]
 name = "apollo-opentelemetry"
-version = "0.12.4"
+version = "0.12.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8d12654664f3c6a8d172090f400e143f123c91ce53cc9b4731d78e13876900c2"
+checksum = "4cdcb6a585af518c6fa1c68a8a24df1309e997c80bcceab59e831cd510f0f08a"
 dependencies = [
  "apollo-configuration",
  "apollo-errors",
@@ -2994,19 +2994,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "serde_yaml"
-version = "0.9.34+deprecated"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a8b1a1a2ebf674015cc02edccce75287f1a0130d394307b36743c2f5d504b47"
-dependencies = [
- "indexmap",
- "itoa",
- "ryu",
- "serde",
- "unsafe-libyaml",
-]
-
-[[package]]
 name = "sharded-slab"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3725,12 +3712,6 @@ name = "unicode-xid"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
-
-[[package]]
-name = "unsafe-libyaml"
-version = "0.2.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "673aac59facbab8a9007c7f6108d11f63b603f7cabff99fabf650fea5c32b861"
 
 [[package]]
 name = "untrusted"

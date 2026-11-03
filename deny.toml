@@ -10,9 +10,6 @@ ignore = [
     # on the unmaintained `paste` crate for its stats-MIB codegen macros. No newer
     # tikv-jemalloc-ctl release drops it, and there's no safe upgrade for `paste` itself.
     "RUSTSEC-2024-0436",
-    # apollo-configuration still depends on serde_yaml even though we have removed our direct
-    # dependency on it here. Once that is updated we can remove this ignore.
-    "RUSTSEC-2024-0449"
 ]
 
 [licenses]
