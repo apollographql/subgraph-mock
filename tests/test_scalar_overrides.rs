@@ -1,4 +1,4 @@
-use harness::{Post, Query, User, make_request, parse_response};
+use harness::{Post, Query, User, make_user_and_posts_request, parse_response};
 
 mod harness;
 
@@ -12,7 +12,7 @@ async fn custom_scalars() -> anyhow::Result<()> {
         // This produces a query requesting a single nullable user by ID (with id, name,
         // is_active, and distance) plus a list of posts (with views). To see it, run the test
         // with RUST_LOG=debug.
-        let response = make_request(54167, state.clone(), None).await?;
+        let response = make_user_and_posts_request(state.clone(), None).await?;
         assert_eq!(200, response.status());
         responses.push(parse_response(response).await?);
     }

@@ -190,7 +190,11 @@ impl TraceBuilder<'_> {
 
             let start_time = self.clock;
 
-            let child = if meta.selection_set.selections.is_empty() {
+            let child = if meta
+                .selection_set
+                .as_ref()
+                .is_none_or(|set| set.selections.is_empty())
+            {
                 Vec::new()
             } else {
                 self.nodes(&merged_child_selections(&fields))
@@ -217,15 +221,14 @@ impl TraceBuilder<'_> {
 /// field selected from several places (e.g. across fragments) is traced as a single node whose
 /// children are the union of those selections.
 fn merged_child_selections(fields: &[&apollo_compiler::Node<Field>]) -> SelectionSet {
-    let mut selections = Vec::new();
-    for field in fields {
-        selections.extend_from_slice(&field.selection_set.selections);
+    let mut merged = SelectionSet::new(fields[0].ty().inner_named_type().clone());
+    for set in fields
+        .iter()
+        .filter_map(|field| field.selection_set.as_ref())
+    {
+        merged.selections.extend_from_slice(&set.selections);
     }
-
-    SelectionSet {
-        ty: fields[0].selection_set.ty.clone(),
-        selections,
-    }
+    merged
 }
 
 /// Flattens a selection set into `(response_name, fields)` groups in query order, following fragment

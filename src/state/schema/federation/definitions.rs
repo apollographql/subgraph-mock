@@ -180,6 +180,7 @@ pub fn link_definition() -> Definition {
         ],
         repeatable: true,
         locations: locations([DirectiveLocation::Schema]),
+        directives: Default::default(),
     }))
 }
 
@@ -205,6 +206,7 @@ pub fn key_definition() -> Definition {
         ],
         repeatable: true,
         locations: locations([DirectiveLocation::Object, DirectiveLocation::Interface]),
+        directives: Default::default(),
     }))
 }
 
@@ -221,6 +223,7 @@ pub fn requires_definition() -> Definition {
         })],
         repeatable: false,
         locations: locations([DirectiveLocation::FieldDefinition]),
+        directives: Default::default(),
     }))
 }
 
@@ -237,6 +240,7 @@ pub fn provides_definition() -> Definition {
         })],
         repeatable: false,
         locations: locations([DirectiveLocation::FieldDefinition]),
+        directives: Default::default(),
     }))
 }
 
@@ -250,6 +254,7 @@ pub fn external_definition() -> Definition {
             DirectiveLocation::Object,
             DirectiveLocation::FieldDefinition,
         ]),
+        directives: Default::default(),
     }))
 }
 
@@ -277,6 +282,7 @@ pub fn tag_definition() -> Definition {
             DirectiveLocation::InputObject,
             DirectiveLocation::InputFieldDefinition,
         ]),
+        directives: Default::default(),
     }))
 }
 
@@ -290,6 +296,7 @@ pub fn shareable_definition() -> Definition {
             DirectiveLocation::Object,
             DirectiveLocation::FieldDefinition,
         ]),
+        directives: Default::default(),
     }))
 }
 
@@ -311,6 +318,7 @@ pub fn inaccessible_definition() -> Definition {
             DirectiveLocation::InputObject,
             DirectiveLocation::InputFieldDefinition,
         ]),
+        directives: Default::default(),
     }))
 }
 
@@ -327,6 +335,7 @@ pub fn override_definition() -> Definition {
         })],
         repeatable: false,
         locations: locations([DirectiveLocation::FieldDefinition]),
+        directives: Default::default(),
     }))
 }
 
@@ -343,6 +352,7 @@ pub fn compose_directive_definition() -> Definition {
         })],
         repeatable: true,
         locations: locations([DirectiveLocation::Schema]),
+        directives: Default::default(),
     }))
 }
 
@@ -353,6 +363,7 @@ pub fn interface_object_definition() -> Definition {
         arguments: vec![],
         repeatable: false,
         locations: locations([DirectiveLocation::Object]),
+        directives: Default::default(),
     }))
 }
 
@@ -369,6 +380,7 @@ pub fn authenticated_definition() -> Definition {
             DirectiveLocation::Scalar,
             DirectiveLocation::Enum,
         ]),
+        directives: Default::default(),
     }))
 }
 
@@ -393,6 +405,7 @@ pub fn requires_scopes_definition() -> Definition {
             DirectiveLocation::Scalar,
             DirectiveLocation::Enum,
         ]),
+        directives: Default::default(),
     }))
 }
 
@@ -417,6 +430,7 @@ pub fn policy_definition() -> Definition {
             DirectiveLocation::Scalar,
             DirectiveLocation::Enum,
         ]),
+        directives: Default::default(),
     }))
 }
 
@@ -437,6 +451,7 @@ pub fn context_definition() -> Definition {
             DirectiveLocation::Object,
             DirectiveLocation::Union,
         ]),
+        directives: Default::default(),
     }))
 }
 
@@ -453,6 +468,7 @@ pub fn from_context_definition() -> Definition {
         })],
         repeatable: false,
         locations: locations([DirectiveLocation::ArgumentDefinition]),
+        directives: Default::default(),
     }))
 }
 
@@ -481,6 +497,7 @@ pub fn defer_definition() -> Node<DirectiveDefinition> {
             DirectiveLocation::FragmentSpread,
             DirectiveLocation::InlineFragment,
         ]),
+        directives: Default::default(),
     })
 }
 
@@ -513,6 +530,7 @@ pub fn stream_definition() -> Node<DirectiveDefinition> {
         ],
         repeatable: false,
         locations: locations([DirectiveLocation::Field]),
+        directives: Default::default(),
     })
 }
 

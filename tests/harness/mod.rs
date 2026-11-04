@@ -132,6 +132,28 @@ where
     send_request(operation_def, None, state, subgraph_name, true).await
 }
 
+pub const USER_AND_POSTS_QUERY: &str =
+    r#"query { user(id: "1") { id name is_active distance } posts { views } }"#;
+
+/// Like [`make_request`], but sends [`USER_AND_POSTS_QUERY`] rather than a query generated from a seed for tests
+/// that need to make assertions on response shape.
+pub async fn make_user_and_posts_request<T>(
+    state: Arc<State>,
+    subgraph_name: T,
+) -> anyhow::Result<ByteResponse>
+where
+    T: Borrow<Option<String>>,
+{
+    send_request(
+        USER_AND_POSTS_QUERY.to_owned(),
+        None,
+        state,
+        subgraph_name,
+        true,
+    )
+    .await
+}
+
 /// Runs a single request to the mock server through the handler method. Uses the operation provided.
 /// Validates that the response was valid based on the provided operation.
 ///

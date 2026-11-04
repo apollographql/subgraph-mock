@@ -225,7 +225,11 @@ fn validate_selection_set(
                             };
 
                             // If the field has a selection set, validate nested fields
-                            if !field.selection_set.selections.is_empty() {
+                            if let Some(child_set) = field
+                                .selection_set
+                                .as_ref()
+                                .filter(|s| !s.selections.is_empty())
+                            {
                                 if field_value.is_null()
                                     && field.ty().is_non_null()
                                     && !errored_fields
@@ -245,7 +249,7 @@ fn validate_selection_set(
                                                 let array_path = format!("{}[{}]", new_path, idx);
                                                 validate_selection_set(
                                                     &array_path,
-                                                    &field.selection_set,
+                                                    child_set,
                                                     item,
                                                     errored_fields,
                                                     document,
@@ -256,7 +260,7 @@ fn validate_selection_set(
                                         Value::Object(_) => {
                                             validate_selection_set(
                                                 &new_path,
-                                                &field.selection_set,
+                                                child_set,
                                                 field_value,
                                                 errored_fields,
                                                 document,
