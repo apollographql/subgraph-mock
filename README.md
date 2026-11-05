@@ -101,11 +101,12 @@ See that crate's own docs for the full attribute set attached to each.
 
 Emitted directly by this server:
 
-| Metric                                       | Type      | Unit | Attributes                                                                                     | Description                                                                                                                                                                                                      |
-| -------------------------------------------- | --------- | ---- | ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `subgraph_mock.response_generation.duration` | Histogram | `s`  | `subgraph.name` (if known)                                                                     | Time spent parsing, validating, and building a response body. Excludes cache hits, injected latency, and HTTP-layer overhead.                                                                                    |
-| `subgraph_mock.response_cache.lookups`       | Counter   | -    | `cache.result` (`hit`/`miss`), `subgraph.name` (if known)                                      | Count of response-cache lookups for `cache_responses`-enabled subgraphs (on by default). A miss paid the cost recorded by `subgraph_mock.response_generation.duration`; a hit didn't.                            |
-| `subgraph_mock.cache.size`                   | Gauge     | -    | `cache` (`parse_and_validate`, `cached_trace_shape`, or `into_response_bytes_and_status_code`) | Current entry count of subgraph-mock's internal caches, sampled every 30 seconds. None of them ever evict, so steady growth over a run's lifetime signals unbounded memory use rather than expected cache reuse. |
+| Metric                                       | Type      | Unit | Attributes                                                                                     | Description                                                                                                                                                                                                                          |
+| -------------------------------------------- | --------- | ---- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `subgraph_mock.response_generation.duration` | Histogram | `s`  | `subgraph.name` (if known)                                                                     | Time spent parsing, validating, and building a response body. Excludes cache hits, injected latency, and HTTP-layer overhead.                                                                                                        |
+| `subgraph_mock.response_cache.lookups`       | Counter   | -    | `cache.result` (`hit`/`miss`), `subgraph.name` (if known)                                      | Count of response-cache lookups for `cache_responses`-enabled subgraphs (on by default). A miss paid the cost recorded by `subgraph_mock.response_generation.duration`; a hit didn't.                                                |
+| `subgraph_mock.cache.size`                   | Gauge     | -    | `cache` (`parse_and_validate`, `cached_trace_shape`, or `into_response_bytes_and_status_code`) | Current entry count of subgraph-mock's internal caches, sampled every 30 seconds. None of them ever evict, so steady growth over a run's lifetime signals unbounded memory use rather than expected cache reuse.                     |
+| `subgraph_mock.failure_schedule.active`      | Gauge     | -    | `subgraph.name` (absent for the top-level schedule)                                            | Whether a `failure_schedule` is failing requests: 1 during a failure window, 0 otherwise. Sampled every second. Reported only for subgraphs with their own schedule; the series without `subgraph.name` covers every other subgraph. |
 
 The OTel SDK's default histogram bucket boundaries are calibrated for millisecond-scale values, not
 the seconds these two duration histograms record in — see the `views` example in
@@ -121,6 +122,37 @@ If the server is started with a federated supergraph schema, it will not infer s
 schemas for any requests to the subgraph-overridden endpoints. The subgraph endpoints only inherit
 behavioral differences, and still operate under the full provided schema for all validation and
 introspection purposes.
+
+#### Failure Schedules
+
+`failure_schedule` fails requests on a fixed timetable: for example, healthy for 60 seconds, then a
+503 for every request for 30 seconds, then healthy again, optionally repeating. This lets a test
+watch a router's circuit breaker open, probe and close against a subgraph that fails and then
+recovers. See `example-config.yaml` for the options.
+
+The clock starts when the server receives its first GraphQL request, so `start` is measured from
+when load arrives rather than from when the container started, and replicas behind a load balancer
+fail together. This differs from the latency waveforms, whose clock starts with the process.
+
+Inside a failure window, an `http_status` failure is returned before anything else happens, so
+`http_error_ratio`, GraphQL errors and the response cache have no effect; the configured latency is
+still added. A `delay` failure waits, then responds as usual.
+
+The server logs `failure schedule clock started` at the first request, and `failure window started`
+and `failure window ended` at each window boundary, with the subgraph and the failure. The
+`subgraph_mock.failure_schedule.active` gauge shows the same thing as a metric.
+
+When testing a router's circuit breaker:
+
+- The router counts 5xx and 429 responses as failures, but not other 4xx statuses.
+- A `delay` only counts as a failure when the router's subgraph timeout is shorter than the delay.
+
+A subgraph override is merged into the top-level schedule key by key. If the top-level schedule sets
+`failure`, an override can change its value but can't switch between `http_status` and `delay`; the
+server refuses to start with both set. Define such schedules per subgraph instead.
+
+Versions of subgraph-mock without this feature refuse to start with a config that contains
+`failure_schedule`.
 
 #### Non-federated Usage
 

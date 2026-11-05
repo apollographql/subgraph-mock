@@ -38,6 +38,30 @@ latency:
     amplitude: 2ms
     period: 10s
 
+# Fails requests on a fixed timetable, e.g. to open and close a router's circuit
+# breaker during a load test. Omit it (the default) and no request is failed on a
+# schedule. Usually set per subgraph (see subgraph_overrides below); set here, it
+# applies to every subgraph without its own override.
+#
+# The clock starts when this server receives its first GraphQL request, so several
+# replicas behind a load balancer fail together once traffic reaches them. This is
+# not the latency waveforms' clock, which starts when the server starts.
+#
+# failure_schedule:
+#   # How long after the first request the first failure window opens. Defaults to 0s.
+#   start: 60s
+#   # How long each failure window lasts. Required, greater than zero.
+#   duration: 30s
+#   # Optional. When set, a new window opens every `period`, measured from `start`;
+#   # it must be longer than `duration`. When omitted, there is a single window.
+#   period: 90s
+#   # What a request inside a window gets. Exactly one of:
+#   #   http_status: <400-599>  respond immediately with this status and an empty body
+#   #   delay: <duration>       respond normally, but only after this extra delay
+#   # Defaults to `http_status: 503`. The latency above still applies either way.
+#   failure:
+#     http_status: 503
+
 # Configuration for how responses should be generated for incoming graphQL
 # requests. What is shown below is the current default configuration that
 # will be used. Additional scalar generators can be defined and the existing
@@ -273,3 +297,12 @@ subgraph_overrides:
         MyHeader: [1, 4]
       array:
         min_length: 5
+    # Healthy for 60s after the first request, then fails every request with a
+    # 503 for 30s, recovering for 60s between failures. Write
+    # `failure_schedule: null` to switch off a top-level schedule for one subgraph.
+    failure_schedule:
+      start: 60s
+      duration: 30s
+      period: 90s
+      failure:
+        http_status: 503

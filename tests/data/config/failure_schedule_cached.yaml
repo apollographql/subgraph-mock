@@ -1,0 +1,5 @@
+subgraph_overrides:
+  special_subgraph:
+    failure_schedule:
+      start: 60s
+      duration: 30s

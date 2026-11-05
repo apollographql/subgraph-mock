@@ -49,6 +49,16 @@ pub fn initialize(
     config_file_name: Option<&str>,
     schema_file_name: Option<&str>,
 ) -> anyhow::Result<(u16, Arc<State>)> {
+    let (port, state) = initialize_owned(config_file_name, schema_file_name)?;
+    Ok((port, Arc::new(state)))
+}
+
+/// Like [initialize], but returns the [State] unshared so a test can still call its `with_*`
+/// builders, e.g. to start a metrics poller.
+pub fn initialize_owned(
+    config_file_name: Option<&str>,
+    schema_file_name: Option<&str>,
+) -> anyhow::Result<(u16, State)> {
     // if tracing is already initialized, let it silently error
     let _ = tracing_subscriber::registry()
         .with(fmt::layer().compact())
@@ -67,10 +77,7 @@ pub fn initialize(
     };
     let (port, state, _telemetry_config) = args.init()?;
 
-    Ok((
-        port,
-        Arc::new(state.with_rng(RngSource::seeded(TEST_RNG_SEED))),
-    ))
+    Ok((port, state.with_rng(RngSource::seeded(TEST_RNG_SEED))))
 }
 
 /// Cached supergraph document that is used as the basis for generating requests

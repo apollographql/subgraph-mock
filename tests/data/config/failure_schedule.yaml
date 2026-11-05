@@ -1,0 +1,20 @@
+# Paused-time tests assert exact durations. With the response cache on, a request can wait on
+# the cache's lock while a parallel test holds it, and tokio auto-advances paused time meanwhile.
+cache_responses: false
+
+latency:
+  base: 5ms
+
+subgraph_overrides:
+  special_subgraph:
+    failure_schedule:
+      start: 60s
+      duration: 30s
+      period: 90s
+      failure:
+        http_status: 503
+  slow_subgraph:
+    failure_schedule:
+      duration: 10s
+      failure:
+        delay: 2s

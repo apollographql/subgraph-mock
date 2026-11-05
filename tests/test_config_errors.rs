@@ -72,3 +72,56 @@ fn nonexistent_config_file_is_an_io_error() {
         .expect_err("expected an io error");
     assert!(matches!(err, Error::Io { .. }));
 }
+
+/// Asserts that `yaml` fails validation with a message containing `expected`.
+fn assert_config_error(yaml: &str, expected: &str) {
+    match parse_err(yaml) {
+        Error::Config(err) => {
+            let report = format!("{:?}", miette::Report::new(err));
+            assert!(
+                report.contains(expected),
+                "expected {expected:?} in:\n{report}"
+            );
+        }
+        other => panic!("expected a config error, got {other:?}"),
+    }
+}
+
+#[test]
+fn failure_schedule_requires_duration() {
+    // A required field missing inside an optional section fails the schema's `anyOf` rather than
+    // naming the field, so check the report points at the schedule.
+    assert_config_error("failure_schedule:\n  start: 10s\n", "{\"start\":\"10s\"}");
+}
+
+#[test]
+fn failure_schedule_duration_must_be_positive() {
+    assert_config_error(
+        "failure_schedule:\n  duration: 0s\n",
+        "duration must be greater than zero",
+    );
+}
+
+#[test]
+fn failure_schedule_period_must_exceed_duration() {
+    assert_config_error(
+        "failure_schedule:\n  duration: 30s\n  period: 30s\n",
+        "period must be longer than duration",
+    );
+}
+
+#[test]
+fn failure_schedule_http_status_must_be_an_error_status() {
+    assert_config_error(
+        "failure_schedule:\n  duration: 30s\n  failure:\n    http_status: 200\n",
+        "http_status must be between 400 and 599",
+    );
+}
+
+#[test]
+fn failure_schedule_in_an_override_is_validated() {
+    assert_config_error(
+        "subgraph_overrides:\n  products:\n    failure_schedule:\n      duration: 0s\n",
+        "duration must be greater than zero",
+    );
+}

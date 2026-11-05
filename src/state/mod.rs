@@ -1,4 +1,4 @@
-use crate::error::Result;
+use crate::{error::Result, failure_schedule::FailureScheduleClock};
 use apollo_healthcheck::{HealthEndpoints, ReadinessSignal, StartupLatch};
 use apollo_opentelemetry::{
     default_instrumentation_scope,
@@ -16,6 +16,10 @@ use tracing::error;
 
 /// How often the `subgraph_mock.cache.size` gauge samples the internal caches' entry counts.
 const CACHE_SIZE_POLL_INTERVAL: Duration = Duration::from_secs(30);
+
+/// How often the `subgraph_mock.failure_schedule.active` gauge samples whether each schedule is
+/// inside a failure window.
+const FAILURE_SCHEDULE_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 /// How often the `subgraph_mock.jemalloc.bytes` gauge samples jemalloc's own stats.
 #[cfg(target_os = "linux")]
@@ -39,6 +43,8 @@ pub struct State {
     pub config: Arc<RwLock<Config>>,
     pub schema: Arc<RwLock<FederatedSchema>>,
     pub rng: RngSource,
+    /// Started by the first GraphQL request; every failure schedule is measured against it.
+    pub failure_schedule_clock: Arc<FailureScheduleClock>,
     pub health_service: SingleHealthEndpoint,
     /// Time spent generating a response body
     pub response_generation_duration: Histogram<f64>,
@@ -50,6 +56,9 @@ pub struct State {
     /// Keeps the [GaugeExt::poll] background task that samples jemalloc stats into
     /// `subgraph_mock.jemalloc.bytes` alive for as long as this `State`.
     _jemalloc_poll_guard: Option<PollGuard>,
+    /// Keeps the [GaugeExt::poll] background task that samples
+    /// `subgraph_mock.failure_schedule.active` alive for as long as this `State`.
+    _failure_schedule_poll_guard: Option<PollGuard>,
     /// Handle to the pollwatcher that updates the schema for this config, so that it only drops out of scope when this state does
     _schema_watcher: PollWatcher,
 }
@@ -105,14 +114,19 @@ impl State {
         // i.e. once State::new's initial schema + config load has actually completed.
         startup_latch.mark_started();
 
+        let failure_schedule_clock =
+            Arc::new(FailureScheduleClock::new(config.failure_schedules()));
+
         Ok(Self {
             config: Arc::new(RwLock::new(config)),
+            failure_schedule_clock,
             schema,
             rng: RngSource::default(),
             response_generation_duration: response_generation_duration_histogram(),
             response_cache_lookups: response_cache_lookups_counter(),
             _cache_size_poll_guard: None,
             _jemalloc_poll_guard: None,
+            _failure_schedule_poll_guard: None,
             health_service,
             _schema_watcher: schema_watcher,
         })
@@ -154,6 +168,36 @@ impl State {
                 observer.observe(size, &[KeyValue::new("cache", cache)]);
             }
         }));
+
+        self
+    }
+
+    /// (Re)starts the `subgraph_mock.failure_schedule.active` poller against whichever meter
+    /// provider is currently installed. Does nothing when no failure schedule is configured.
+    pub fn with_failure_schedule_metrics(mut self) -> Self {
+        if !self.failure_schedule_clock.has_schedules() {
+            return self;
+        }
+
+        let gauge = meter()
+            .u64_gauge("subgraph_mock.failure_schedule.active")
+            .with_description(
+                "Whether a `failure_schedule` is failing requests: 1 during a failure window, 0 \
+                 otherwise. Sampled every second. Reported only for subgraphs with their own \
+                 schedule; the series without `subgraph.name` covers every other subgraph.",
+            )
+            .build();
+        let clock = self.failure_schedule_clock.clone();
+        self._failure_schedule_poll_guard =
+            Some(gauge.poll(FAILURE_SCHEDULE_POLL_INTERVAL, move |observer| {
+                for (subgraph, active) in clock.active() {
+                    let attrs: Vec<_> = subgraph
+                        .map(|name| KeyValue::new("subgraph.name", name.to_owned()))
+                        .into_iter()
+                        .collect();
+                    observer.observe(u64::from(active), &attrs);
+                }
+            }));
 
         self
     }
