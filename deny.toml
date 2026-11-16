@@ -10,6 +10,10 @@ ignore = [
     # on the unmaintained `paste` crate for its stats-MIB codegen macros. No newer
     # tikv-jemalloc-ctl release drops it, and there's no safe upgrade for `paste` itself.
     "RUSTSEC-2024-0436",
+    # serde_yaml, which this crate and apollo-configuration both use to parse config, depends on
+    # the unmaintained `unsafe-libyaml`. serde_yaml is itself deprecated (0.9.34+deprecated), so
+    # there's no upgrade until both move to another YAML crate.
+    "RUSTSEC-2024-0449",
 ]
 
 [licenses]

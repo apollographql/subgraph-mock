@@ -1,0 +1,10 @@
+latency:
+  base: 5ms
+
+failure_schedule:
+  duration: 30s
+
+subgraph_overrides:
+  headers_only_subgraph:
+    headers:
+      x-subgraph: headers_only_subgraph
